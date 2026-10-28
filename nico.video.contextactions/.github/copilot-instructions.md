@@ -2,7 +2,7 @@
 
 ## Project overview
 
-A Kodi Python addon (`nico.video.contextactions`) providing four context-menu actions for silent library management: **Toggle Watch**, **Watch in Past**, **Refresh Local**, **Refresh Internet**. Targets Kodi's `xbmc.python` 3.0.1+ API.
+A Kodi Python addon (`nico.video.contextactions`) providing five context-menu actions for silent library management: **Watched Toggle**, **Watched to Past...**, **Move to Top**, **Refresh (Local)**, **Refresh (Internet)**. Targets Kodi's `xbmc.python` 3.0.1+ API.
 
 ## Dev environment
 
@@ -22,10 +22,13 @@ Each action is a standalone script invoked directly by Kodi via `RunScript()` or
 
 | Script | Action |
 |---|---|
-| `resources/lib/toggle_watch.py` | Silent Watch Toggle |
-| `resources/lib/watched_past.py` | Silent Watch in Past |
-| `resources/lib/refresh_local.py` | Silent Refresh (Local NFO) |
-| `resources/lib/refresh_internet.py` | Silent Refresh (Internet scraper) |
+| `resources/lib/toggle_watch.py` | Watched Toggle |
+| `resources/lib/watched_past.py` | Watched to Past... |
+| `resources/lib/move_to_top.py` | Move to Top |
+| `resources/lib/refresh_local.py` | Refresh (Local NFO) |
+| `resources/lib/refresh_internet.py` | Refresh (Internet scraper) |
+| `resources/lib/smart_cmd.py` | Persist • Save Show Profile (also called by `service.py` on playback stop/end) |
+| `resources/lib/common_locks.py` (run as script) | nICo Dev • Reload Modules |
 
 ### Shared modules
 - **`common_actions.py`** — All shared utilities + the full local refresh logic (`refresh()`). Contains `get_episodes()`, `_get_canonical_snapshot()`, `_restore_lastplayed()`, `_snapshot_playcount()`, `_restore_playcount()`, `_resolve_root_id()`, `execute_rpc()`, `_navigate_list()`, `_fetch_show_title()`, `_wait_for_db_change()`, `_wait_for_all_changed()`, etc.

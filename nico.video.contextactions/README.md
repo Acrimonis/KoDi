@@ -27,7 +27,7 @@ Sets the `lastPlayed` date of a target item to now, without changing its watched
 - **Notification:** Non-blocking toasts with the show title as heading. Countdown (grey): `Moving to top in 5s…` → 4s → 3s → 2s → 1s. Result: `Moved to top • S01E03` (movies: `Moved to top`).
 - **Use case:** Brings a show to the top of your "last played" sort order so it is the next one to continue.
 
-### Silent Watch Toggle
+### Watched Toggle
 Intelligently switches an item between "Watched" and "Unwatched" status.
 - **Movies & Episodes:** Toggles the individual item. After toggling an episode, automatically moves focus to the first unwatched episode in the season (if any).
 - **TV Shows & Seasons:** Batch-updates all episodes. If any episode is unwatched, the entire set is marked watched; otherwise all are marked unwatched.
@@ -36,16 +36,27 @@ Intelligently switches an item between "Watched" and "Unwatched" status.
 - **Rich notification:** Shows result as `[Show Name] • Changed to Watched: 3 seasons, 22 episodes` (singular/plural aware). Single episodes and movies are also notified.
 - **Path Fallback:** Includes a Tier 2 regex parser for `videodb://` paths to ensure reliability even when standard InfoLabels fail.
 
-### Silent Refresh (Internet)
+### Refresh (Internet)
 Rescrapers the selected item's metadata from the internet (equivalent to `ignorenfo=True`).
 - If the internet scraper returns no data and the item would be lost, the addon automatically falls back to a Local NFO refresh to prevent accidental deletion.
 - Supported for: `movie`, `tvshow`, `season`, `episode`.
 
-### Silent Refresh (Local)
+### Refresh (Local)
+> **Currently disabled:** the context menu entry is commented out in `addon.xml`. The script (`refresh_local.py`) is unchanged and can still be bound to a key (see Manual Keyboard Mapping).
+
 Refreshes the selected item's metadata using local NFO files (equivalent to `ignorenfo=False`).
 - **Movies & Episodes:** Refreshes the single item.
 - **TV Shows & Seasons:** Recursively refreshes the container and all child episodes. Notification shows count (e.g. `1 show, 3 seasons, 62 episodes`). Any per-episode failures are reported in the notification.
 - Supported for: `movie`, `tvshow`, `season`, `episode`.
+
+### Persist • Save Show Profile
+Bookmarks where you are in a show by writing a profile to `addon_data/nico.video.contextactions/{showid}.json`. Available for TV Shows, Seasons and Episodes.
+- **Content:** show name/ID, readable location (`Show • Season 2 • Episode 5`), timestamp, `videodb://` paths (show/season/episode), episode title, and for episodes the resume info (position, total, percentage, strategy). Keeps the last 5 previous locations in `history`; a location is archived only when it changed.
+- **Triggers:**
+  - **Manual:** the context menu entry (strategy `manual_save`).
+  - **Automatic:** a background service (`service.py`, starts with Kodi) watches playback. When playback **stops** or **ends** it saves the profile of the item that was playing (strategy `in_progress` if a resume position exists, otherwise `completed`).
+- **Notification:** `Location bookmarked.` (manual, show/season) or `Season 02 Episode 05 • Progress saved (37%)` (episodes and automatic saves).
+- The profile is written only; nothing in this addon reads it yet.
 
 ### Concurrent Action Safety
 All actions use a **per-show file-based mutex** (`{showid}_{pid}.lock` in Kodi's temp dir) to prevent two operations running on the same show at the same time.
