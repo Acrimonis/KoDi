@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<addon id="nico.video.contextactions" name="nICo Video Context Actions" version="1.0.6" provider-name="nICo BaD">
+<addon id="nico.video.contextactions" name="nICo Video Context Actions" version="1.0.7" provider-name="nICo BaD">
     <requires>
         <import addon="xbmc.python" version="3.0.1"/>
     </requires>
@@ -20,6 +20,14 @@
             </item>
             <item library="resources/lib/toggle_watch.py">
                 <label>Silent &#x2022; Watched Toggle</label>
+                <visible>[String.IsEqual(ListItem.DBType,movie) | String.IsEqual(ListItem.DBType,tvshow) | String.IsEqual(ListItem.DBType,season) | String.IsEqual(ListItem.DBType,episode)]</visible>
+            </item>
+            <item library="resources/lib/move_to_top.py">
+                <label>Silent &#x2022; Move to Top</label>
+                <visible>[String.IsEqual(ListItem.DBType,movie) | String.IsEqual(ListItem.DBType,tvshow) | String.IsEqual(ListItem.DBType,season) | String.IsEqual(ListItem.DBType,episode)]</visible>
+            </item>
+            <item library="resources/lib/common_locks.py">
+                <label>nICo Dev &#x2022; Reload Modules</label>
                 <visible>[String.IsEqual(ListItem.DBType,movie) | String.IsEqual(ListItem.DBType,tvshow) | String.IsEqual(ListItem.DBType,season) | String.IsEqual(ListItem.DBType,episode)]</visible>
             </item>
             <item library="resources/lib/smart_cmd.py">

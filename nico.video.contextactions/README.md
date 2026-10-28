@@ -1,7 +1,7 @@
 # nICo Video Context Actions for Kodi
 
 **Addon ID:** `nico.video.contextactions`  
-**Version:** 1.0.4 
+**Version:** 1.0.7 
 **Author:** nICo BaD  
 **License:** GPL-2.0-only
 
@@ -11,7 +11,7 @@ A lightweight Kodi addon that adds silent, high-performance library management a
 
 ## Features
 
-### Silent Watch in Past
+### Watched to Past...
 Clamps the `lastPlayed` date of recently-watched episodes back in time, without changing their watched/unwatched status.
 - **Scope:** Episode → that episode only. Season → all episodes in that season. TV Show → all episodes across all seasons.
 - **Delta selection:** On each invocation a dialog prompts for how far back to shift: `Yesterday / 3 days / 1 week / 10 days / 1 month / 6 months / Never (clear dates)`. The last choice is remembered across restarts (saved to `addon_data/.../prefs.json`).
@@ -19,6 +19,13 @@ Clamps the `lastPlayed` date of recently-watched episodes back in time, without 
 - **UI refresh:** 1 `SetEpisodeDetails` RPC per affected season fires the UI event; remaining episodes written via SQL batch.
 - **Notification:** `Watch date to 14 May 26 • 8 episodes` / `Watch date cleared • 8 episodes`.
 - **Use case:** Prevents a binge-watched show from jumping to the top of your "last played" sort order.
+
+### Move to Top
+Sets the `lastPlayed` date of a target item to now, without changing its watched status.
+- **Target:** Episode → the episode itself. Season → first unwatched episode of the season, or its first episode if all are watched. TV Show → first unwatched episode of the show, or its first episode if all are watched (specials, season 0, are considered last). Movie → the movie itself.
+- **Delay:** Fixed 5-second countdown, not cancellable. The show lock is taken after the countdown and the target is computed then.
+- **Notification:** Non-blocking toasts with the show title as heading. Countdown (grey): `Moving to top in 5s…` → 4s → 3s → 2s → 1s. Result: `Moved to top • S01E03` (movies: `Moved to top`).
+- **Use case:** Brings a show to the top of your "last played" sort order so it is the next one to continue.
 
 ### Silent Watch Toggle
 Intelligently switches an item between "Watched" and "Unwatched" status.
@@ -50,7 +57,7 @@ All actions use a **per-show file-based mutex** (`{showid}_{pid}.lock` in Kodi's
 
 ## Supported Item Types
 
-All four actions are visible in the context menu for:
+All five actions are visible in the context menu for:
 
 | Type | DBType |
 |------|--------|
@@ -70,7 +77,7 @@ All four actions are visible in the context menu for:
 
 2. Restart Kodi or enable the addon via **Settings → Add-ons → My add-ons**.
 
-3. The four actions will appear automatically in the **right-click context menu** on any supported library item.
+3. The five actions will appear automatically in the **right-click context menu** on any supported library item.
 
 ---
 
@@ -94,6 +101,8 @@ Add the following inside the `<keymap>` tags. This targets the Video Library spe
             <i>RunScript(special://home/addons/nico.video.contextactions/resources/lib/refresh_internet.py)</i>
             <!-- Local Refresh -->
             <l>RunScript(special://home/addons/nico.video.contextactions/resources/lib/refresh_local.py)</l>
+            <!-- Move to Top -->
+            <t>RunScript(special://home/addons/nico.video.contextactions/resources/lib/move_to_top.py)</t>
         </keyboard>
     </Videos>
 </keymap>
