@@ -13,6 +13,8 @@ Working log for addon changes. Updated after each confirmed step.
 | `resources/lib/move_to_top.py` | done — untested in live Kodi |
 | `addon.xml`: add `Silent • Move to Top` menu item | done — untested in live Kodi |
 | `addon.xml`: add `nICo Dev • Reload Modules` menu item (runs `common_locks.py` reloader) | done |
+| `deploy.bat` (D: portable, symlinked to repo) and `deploy-qpc.bat` (P:\.kodi_d\addons) | done — repo root |
+| README: Development section (reload entry, deploy scripts, enable note) | done |
 | Enable addon in Kodi (portable profile had it `enabled=0` in `Addons33.db`) | todo — user |
 | Live Kodi test (all four dbtypes, all-watched fallback, queued case) | todo |
 | Version bump to 1.0.7 (`addon.xml`, README) | done |

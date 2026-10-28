@@ -79,6 +79,18 @@ All five actions are visible in the context menu for:
 
 3. The five actions will appear automatically in the **right-click context menu** on any supported library item.
 
+> A newly installed addon may be **disabled** (e.g. a fresh portable profile). If no entries appear, enable it in **Settings → Add-ons → My add-ons**.
+
+---
+
+## Development
+
+- **Reload Modules:** the context menu entry `nICo Dev • Reload Modules` runs `resources/lib/common_locks.py`, which reloads the addon's cached Python modules without restarting Kodi (toast: `nICo Dev PlugiN: N modules reloaded`). Changes to `addon.xml` still require a Kodi restart.
+- **Deploy scripts** (repo root, `robocopy /MIR` into a Kodi addons folder, excluding `.git`, `.github`, `__pycache__`, `AGENTS.md`, `Tracking.md`, `*.zip`, `*.bat`):
+  - `deploy.bat` → `D:\.kodi\portable_data\addons\nico.video.contextactions`
+  - `deploy-qpc.bat` → `P:\.kodi_d\addons\nico.video.contextactions`
+- **Tracking.md** logs the status, decisions and open items of ongoing work.
+
 ---
 
 ## Advanced: Manual Keyboard Mapping
