@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<addon id="nico.video.contextactions" name="nICo Video Context Actions" version="1.0.6" provider-name="nICo BaD">
+    <requires>
+        <import addon="xbmc.python" version="3.0.1"/>
+    </requires>
+    
+    <extension point="kodi.context.item">
+        <menu id="kodi.core.main">
+            <item library="resources/lib/refresh_internet.py">
+                <label>Silent &#x2022; Refresh (Internet)</label>
+                <visible>[String.IsEqual(ListItem.DBType,movie) | String.IsEqual(ListItem.DBType,tvshow) | String.IsEqual(ListItem.DBType,season) | String.IsEqual(ListItem.DBType,episode)]</visible>
+            </item>
+            <item library="resources/lib/refresh_local.py">
+                <label>Silent &#x2022; Refresh (Local)</label>
+                <visible>[String.IsEqual(ListItem.DBType,movie) | String.IsEqual(ListItem.DBType,tvshow) | String.IsEqual(ListItem.DBType,season) | String.IsEqual(ListItem.DBType,episode)]</visible>
+            </item>
+            <item library="resources/lib/watched_past.py">
+                <label>Silent &#x2022; Watched to Past...</label>
+                <visible>[String.IsEqual(ListItem.DBType,tvshow) | String.IsEqual(ListItem.DBType,season) | String.IsEqual(ListItem.DBType,episode)]</visible>
+            </item>
+            <item library="resources/lib/toggle_watch.py">
+                <label>Silent &#x2022; Watched Toggle</label>
+                <visible>[String.IsEqual(ListItem.DBType,movie) | String.IsEqual(ListItem.DBType,tvshow) | String.IsEqual(ListItem.DBType,season) | String.IsEqual(ListItem.DBType,episode)]</visible>
+            </item>
+            <item library="resources/lib/smart_cmd.py">
+                <label>Persist &#x2022; Save Show Profile</label>
+                <visible>[String.IsEqual(ListItem.DBType,tvshow) | String.IsEqual(ListItem.DBType,season) | String.IsEqual(ListItem.DBType,episode)]</visible>
+            </item>
+        </menu>
+    </extension>
+
+    <extension point="xbmc.service" library="resources/lib/service.py"/>
+
+    <extension point="xbmc.python.script" library="resources/lib/common_actions.py">
+        <provides>executable</provides>
+    </extension>
+
+    <extension point="xbmc.addon.metadata">
+        <summary lang="en">Silent Library tools for power users.</summary>
+        <description lang="en">Advanced context menu actions for Kodi.</description>
+        <platform>all</platform>
+        <license>GPL-2.0-only</license>
+        <assets>
+            <icon>icon.png</icon>
+        </assets>
+    </extension>
+</addon>
