@@ -13,7 +13,11 @@ _LOAD_TIMEOUT = 8  # seconds to wait for the list to load
 
 def _is_back(prev, path):
     """True when `path` is the parent of `prev`: Kodi restores the cursor itself on the way back."""
-    return bool(prev) and prev != path and prev.startswith(path)
+    if not prev:
+        return False
+    # Kodi appends a query (?xsp=…, ?tvshowid=…) to the folder path: compare the paths without it
+    prev, path = prev.split('?', 1)[0], path.split('?', 1)[0]
+    return prev != path and prev.startswith(path)
 
 
 class FocusNavigator:
@@ -24,12 +28,21 @@ class FocusNavigator:
 
     def __init__(self):
         self._seen = None      # last Container.FolderPath seen in the Videos window
+        self._away = False     # Videos window left since the last tick in it
+        self._played = False   # a video played while away (Kodi restores the folder itself on return)
         self._pending = None   # (path, show_id, is_episode_list) waiting for its list to load
         self._deadline = 0
+        self._why = ''         # last reason the pending list was not ready (logged on timeout)
 
     def tick(self):
         if not xbmc.getCondVisibility('Window.IsActive(videos)'):
+            self._away = True
+            self._played = self._played or xbmc.getCondVisibility('Player.HasVideo')
             return
+        if self._away:
+            if not self._played:
+                self._seen = None  # came back from elsewhere (Home, ...): treat as a fresh entry
+            self._away = self._played = False
         path = xbmc.getInfoLabel('Container.FolderPath')
         if not path:
             return
@@ -40,6 +53,11 @@ class FocusNavigator:
             if m and not _is_back(prev, path):
                 self._pending = (path, int(m.group(1)), m.group(2) is not None)
                 self._deadline = time.monotonic() + _LOAD_TIMEOUT
+                self._why = 'list not loaded'
+                xbmc.log(f"nICo Service: [NAV:{m.group(1)}] entered {'episode' if m.group(2) is not None else 'season'} list "
+                         f"{path.split('?', 1)[0]}", xbmc.LOGINFO)
+            elif m:
+                xbmc.log(f"nICo Service: [NAV:{m.group(1)}] back to {path.split('?', 1)[0]} — left to Kodi", xbmc.LOGINFO)
         if self._pending:
             try:
                 self._try_focus()
@@ -51,22 +69,33 @@ class FocusNavigator:
         path, show_id, is_episode_list = self._pending
         if time.monotonic() > self._deadline:
             self._pending = None
+            xbmc.log(f"nICo Service: [NAV:{show_id}] gave up after {_LOAD_TIMEOUT}s: {self._why}", xbmc.LOGINFO)
             return
-        if xbmc.getInfoLabel('Container.FolderPath') != path or xbmc.getCondVisibility('Container.IsUpdating'):
+        if xbmc.getInfoLabel('Container.FolderPath') != path:
+            self._why = 'folder changed'
+            return
+        if xbmc.getCondVisibility('Container.IsUpdating'):
+            self._why = 'container still updating'
             return
         view = next((v for v in _VIEW_IDS if xbmc.getCondVisibility(f'Control.IsVisible({v})')), None)
         if view is None:
+            self._why = 'no visible view container among the standard IDs'
             return
         count = int(xbmc.getInfoLabel(f'Container({view}).NumItems') or 0)
         if count == 0:
+            self._why = f'view {view} has no items'
             return
         self._pending = None
         profile = smart_cmd.load_profile(show_id)
         if profile is None:
+            xbmc.log(f"nICo Service: [NAV:{show_id}] no profile — nothing to select", xbmc.LOGINFO)
             return
         index = self._find(view, count, show_id, profile, is_episode_list)
         if index is None:
-            xbmc.log(f"nICo Service: [NAV:{show_id}] nothing to select in {path}", xbmc.LOGDEBUG)
+            resume = (profile.get('status') or {}).get('resume') or {}
+            xbmc.log(f"nICo Service: [NAV:{show_id}] nothing to select in {count} items (view {view}); "
+                     f"profile strategy={resume.get('strategy')} season={resume.get('season_num')} "
+                     f"episode_id={resume.get('episode_id')}", xbmc.LOGINFO)
             return
         xbmc.executebuiltin(f'SetFocus({view},{index},absolute)')
         xbmc.log(f"nICo Service: [NAV:{show_id}] {path} -> item {index} (view {view})", xbmc.LOGINFO)

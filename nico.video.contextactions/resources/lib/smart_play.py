@@ -191,8 +191,9 @@ def smart_play():
         return _default_play(tag, f"saved episode is in season {ep.get('season')}, not {season_num}")
 
     position = float(resume.get('position', 0))
-    if strategy == 'in_progress' and position > 0 and not (ep.get('resume') or {}).get('position'):
-        # Kodi's resume point was cleared (reset / marked watched / never stored): start over
+    if strategy == 'in_progress' and position > smart_cmd.min_resume_seconds() and not (ep.get('resume') or {}).get('position'):
+        # Kodi's resume point was cleared (reset / marked watched / never stored): start over.
+        # Below the minimum Kodi never stores one, so the profile position is kept.
         xbmc.log(f"nICo Context: [{tag}] Library resume point is empty — ignoring saved position {position:.1f}s", xbmc.LOGINFO)
         position = 0.0
     start = max(0.0, position - _REWIND_SECONDS)

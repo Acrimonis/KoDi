@@ -35,7 +35,7 @@ Working log for addon changes. Updated after each confirmed step.
 | F | README: per-entry visibility table, Persist/Smart Play sections, remote keymap example | done |
 | I | Navigation to the saved season/episode (`nav_focus.py`, service loop 0.1s) | done — user-reported working |
 | J | Smart Play ignores an `in_progress` profile when the library resume point is empty | done — user-reported working |
-| G | Release: 1.0.8 was never zipped; superseded by **1.0.9** (2026-10-29): version bumped in `addon.xml` and README, `nico.video.contextactions-1.0.9.zip` generated (addon files only, no dev docs), deployed to QPC (`deploy-qpc.bat`), committed and pushed. Step A closed with items 3, 6, 9 (movie), 11 (queued) unproven/skipped by decision | done |
+| G | Release: 1.0.8 was never zipped; superseded by **1.0.9** (2026-10-29; re-released under the same version later that day with orphan-profile adoption, the 180s guard, navigation fixes and the autoplay resume menu — zip regenerated, QPC redeployed): version bumped in `addon.xml` and README, `nico.video.contextactions-1.0.9.zip` generated (addon files only, no dev docs), deployed to QPC (`deploy-qpc.bat`), committed and pushed. Step A closed with items 3, 6, 9 (movie), 11 (queued) unproven/skipped by decision | done |
 
 Implementation notes (2026-10-28):
 - Syntax checked with Python 3.8 grammar only (`ast.parse`); no runtime test outside Kodi.
@@ -107,18 +107,18 @@ Reads `{showid}.json` when a show or season is active and plays accordingly:
 
 | Saved strategy | Behavior |
 |----------------|----------|
-| `in_progress` | Play the saved episode, resume 5s before the saved position (clamped ≥ 0) |
-| `completed` | Kodi's default play (decided) |
-| `manual_save` on an episode | Resume that episode at the saved position |
+| `in_progress` | Play the saved episode, resume 5s before the saved position (clamped ≥ 0); if Kodi's library resume point is empty → start at 0 (step J) |
+| `completed` | Play the next unwatched episode (step D2): first unwatched after the saved one, else first unwatched (season scope); starts at its library resume point − 5s or 0; nothing unwatched → Kodi's default play |
+| `manual_save` on an episode | Resume that episode at the saved position (library resume point not consulted) |
 | `manual_save` on a show/season (no resume data) | Kodi's default play |
 
-- Fallback everywhere = Kodi's default play (decided). `priority_stack` stays in the file but is not used. No profile → one is created from the library first (see "Profile creation").
-- Net effect: Smart Play only changes behavior when the profile says `in_progress` on a valid episode in scope; then it resumes 5s before the saved position.
-- Starts playback with `Player.Open` on the episode ID with resume; the existing service then saves the profile on stop. Read-only, no lock.
+- Fallback = Kodi's default play (decided). `priority_stack` stays in the file but is not used. No profile → one is created from the library first (see "Profile creation").
+- Net effect: Smart Play changes behavior when the profile says `in_progress` on a valid episode in scope (resume 5s before the saved position) or `completed` (next unwatched episode).
+- Starts playback with `Player.Open` on the single episode ID with resume (honored; playlist items ignore it), then appends the later episodes to the video playlist for autoplay; the existing service saves the profile on stop. Read-only, no lock.
 - **Trigger (decided): hijack regular Play on a show/season.** An addon cannot override Kodi's built-in Play, so this is done with a keymap: the Play key/button in the Videos window runs `smart_play.py`. For any item that isn't a tvshow/season, or while a video plays, the script runs the key's original action, `Action(PlayPause)` by default (builtin, not routed through the keymap, so no loop). Not covered: the built-in context menu "Play", skin/info-dialog Play buttons, mouse/touch. **Bound input (decided): the remote's Play button only.** The exact keymap tag depends on how the remote reaches Kodi (CEC → `<remote><play>`, IR/MCE → usually keyboard media key `<play_pause>`; phone apps like Kore/Yatse call JSON-RPC directly and cannot be intercepted). To identify: enable Kodi debug logging, press Play, read the `OnKey` line in `kodi.log`.
 - **Season active, saved episode in another season (decided):** Kodi's default play for that season.
 - **Saved episode missing from the library (decided):** Kodi's default play.
-- **Starting playback (decided: try `Player.Open`, user verifies in Kodi):** `Player.Open` with the episode ID and a resume time = saved position − 5s; the RPC response is logged. User checks: right episode, right start time, and whether the next episode plays afterwards. If the resume time is not honored → fallback: start the episode, then `seekTime(saved − 5)` once playback starts. If playback stops after the episode → build a playlist starting at that episode.
+- **Starting playback (done, verified live):** `Player.Open` with the episode ID and a resume time = saved position − 5s; the RPC response is logged. If the resume time is not honored → fallback: `seekTime(saved − 5)` once playback starts. Autoplay: later episodes appended to the video playlist after playback starts (see step D2).
 - Profile location: `special://profile/addon_data/nico.video.contextactions/{showid}.json`.
 
 ### Snapshot fix (planned, step E)
@@ -138,7 +138,7 @@ Reads `{showid}.json` when a show or season is active and plays accordingly:
 - **On Smart Play with no profile:** build and write `{showid}.json` from the library, then play from it:
   - Most recently played episode (by `lastPlayed`) with a resume point → `in_progress` at that position.
   - Most recently played episode with a date but not watched (e.g. a Move to Top target) → `in_progress` at 0 (refined during review).
-  - Most recently played episode fully watched → `completed` → Kodi's default play.
+  - Most recently played episode fully watched → `completed` → next unwatched episode (Kodi's default play if none).
   - Show never played → profile starts at the first unwatched episode (season 0 last).
   - Marked with `status.source = "derived"`; strategy stays `in_progress`/`completed` so Smart Play's rules apply unchanged (refined during review, replaces a `derived` strategy label).
 - **On playback start (episodes only):** write the profile only if none exists yet (confirmed), strategy `in_progress`, so a crash or force-quit mid-episode on a never-saved show still leaves a profile. Position is the library's resume point (0 for a fresh episode). If a profile already exists, start writes nothing; the first 30s tick updates it. Silent (no toast) at start (confirmed); stop/end keep their toast.
@@ -176,6 +176,13 @@ Reads `{showid}.json` when a show or season is active and plays accordingly:
 
 ## Open items
 
+- Review of 1.0.9 (2026-10-29):
+  1. Step J guard — done: ignore an `in_progress` profile only when its position is past `video.ignoresecondsatstart` (advancedsettings.xml, default 180s). A crash/quit after that point where Kodi stored nothing still restarts at 0.
+  2. Navigation re-entry — done: leaving the Videos window without playback resets the last-path memory, so reopening a show from a widget jumps again. Side effect: returning to the same folder from Home/Settings jumps the cursor to the saved item. Also fixed: the "going back" test compared paths including Kodi's `?xsp=…`/`?tvshowid=…` query, so it never matched and going back to the season list re-jumped (seen in the 11:35/11:39 log); the query is now stripped. INFO logging added for each decision (`entered … list`, `back to … — left to Kodi`, `gave up after 8s: <reason>`, `no profile`, `nothing to select …`). A service that was not restarted after an update looked like broken navigation.
+  3. Playlist items (autoplay) ignore the library resume point: a partially watched later episode starts at 0 (Kodi behavior) — done (step K): `service.py` shows Kodi's resume menu ("Resume from mm:ss" with Kodi's localized string 12022 / "Restart"; first entry default, cancel = resume; episode info in a toast) when an episode starts < 10s after another one's `Ended` and a saved position ≥ 30s exists (profile status/history first, else Kodi's resume point; reset rule as in step J). Waits for the user, no timeout; dialog in a thread so the service loop keeps running. Verified live (prompt worked); menu restyled 2026-10-29, restyle not yet seen live. `min_resume_seconds()` moved to `smart_cmd.py`.
+  4. R6 — done: `smart_cmd.adopt_orphan_profile` (called by `load_profile` and `persist_show_by_id`): renames the profile of the same-named show whose old ID is gone to the new ID and remaps episodes by season/episode (history too). Unit-checked with stubs (adoption, same-name-existing show skipped); not yet live. Live test: delete the new `{id}.json` of a show that Refresh (Internet) recreated, press Play on it.
+  5. `nav_focus` keeps the `smart_play` it first imported until Kodi restarts (Reload Modules does not reach the service).
+  6. Unproven: checklist 3 (ticks) and 11 (queued snapshot).
 - `• Refresh (Local)` menu entry is commented out in `addon.xml` for now. The README notes it as disabled; `refresh_local.py` is untouched, and the README keymap `l` binding still works.
 - Trailing `…` on the countdown message and standard (not grey) result toast: implemented as defaults, not explicitly confirmed.
 - Lock/snapshot key collision: `_resolve_root_id` returns the movie ID for movies and the show ID for shows, so movie 5 and show 5 share the same lock and snapshot file. Effects: a movie action waits for an action on show 5, and a restore on show 5 also rewrites the movie's `lastPlayed` from the snapshot. Not planned. (Profile file collision is fixed: profiles are written only with a show ID.)

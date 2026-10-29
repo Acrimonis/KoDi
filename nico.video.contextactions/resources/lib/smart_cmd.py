@@ -1,6 +1,7 @@
 import os
 import json
 import time
+import xml.etree.ElementTree as ET
 import xbmc
 import xbmcgui
 import xbmcvfs
@@ -8,19 +9,128 @@ import common_locks
 import common_actions
 
 _CFG_DIR = 'special://profile/addon_data/nico.video.contextactions/'
+_DEFAULT_MIN_RESUME = 180  # Kodi's video.ignoresecondsatstart default
 
 
 def profile_path(show_id):
     return os.path.join(xbmcvfs.translatePath(_CFG_DIR), f"{show_id}.json")
 
 
-def load_profile(show_id):
-    """Return the saved profile dict for show_id, or None if missing/unreadable."""
+def min_resume_seconds():
+    """Kodi stores no resume point before this many seconds (advancedsettings.xml, default 180)."""
     try:
-        with open(profile_path(show_id), 'r', encoding='utf-8') as f:
+        root = ET.parse(xbmcvfs.translatePath('special://profile/advancedsettings.xml')).getroot()
+        return int(root.findtext('video/ignoresecondsatstart'))
+    except Exception:
+        return _DEFAULT_MIN_RESUME
+
+
+def _read_profile(path):
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
             return json.load(f)
     except Exception:
         return None
+
+
+def load_profile(show_id):
+    """Return the saved profile dict for show_id, or None if missing/unreadable.
+
+    A show recreated by Refresh (Internet) has a new ID: its old profile is adopted first.
+    """
+    path = profile_path(show_id)
+    if not os.path.exists(path):
+        adopt_orphan_profile(show_id)
+    return _read_profile(path)
+
+
+def _remap_status(status, show_id, episodes):
+    """Re-point a status block (paths, resume.episode_id) at the recreated show.
+
+    episodes: {(season, episode): episode details} of the new show. Returns None if the saved
+    episode no longer exists. Season/episode paths are rebuilt only for statuses that carry resume info.
+    """
+    status = dict(status)
+    paths = {"show": f"videodb://tvshows/titles/{show_id}/"}
+    resume = status.get('resume')
+    if resume:
+        ep = episodes.get((resume.get('season_num'), resume.get('episode_num')))
+        if not ep:
+            return None
+        status['resume'] = dict(resume, episode_id=ep['episodeid'])
+        season_id = ep.get('seasonid')
+        if season_id:
+            paths["season"] = f"videodb://tvshows/titles/{show_id}/{season_id}/"
+            paths["episode"] = f"videodb://tvshows/titles/{show_id}/{season_id}/{ep['episodeid']}/"
+    status['paths'] = paths
+    return status
+
+
+def adopt_orphan_profile(show_id, show_title=None):
+    """Take over the profile of a show that Refresh (Internet) recreated under a new ID.
+
+    Acts only when show_id has no profile and exactly one other profile has the same show name and
+    an ID that is gone from the library. Saved episodes (current and history) are remapped by
+    season/episode number. Returns True if a profile was adopted.
+    """
+    new_path = profile_path(show_id)
+    if os.path.exists(new_path):
+        return False
+    show_title = show_title or common_actions._fetch_show_title(show_id, fallback="")
+    if not show_title:
+        return False
+    cfg_dir = xbmcvfs.translatePath(_CFG_DIR)
+    try:
+        names = os.listdir(cfg_dir)
+    except OSError:
+        return False
+
+    candidates = []
+    for name in names:
+        stem, ext = os.path.splitext(name)
+        if ext != '.json' or not stem.isdigit() or int(stem) == int(show_id):
+            continue
+        old = _read_profile(os.path.join(cfg_dir, name))
+        if not old or str((old.get('info') or {}).get('show_name', '')).casefold() != show_title.casefold():
+            continue
+        res = common_actions.execute_rpc("VideoLibrary.GetTVShowDetails", {"tvshowid": int(stem)})
+        if res.get('result', {}).get('tvshowdetails'):
+            continue  # that show still exists: a different show with the same name
+        candidates.append((int(stem), old))
+
+    tag = f"PERSIST:{show_title}"
+    if len(candidates) != 1:
+        if candidates:
+            xbmc.log(f"nICo Context: [{tag}] Profile adoption skipped — {len(candidates)} orphaned profiles match "
+                     f"{[c[0] for c in candidates]}", xbmc.LOGWARNING)
+        return False
+    old_id, old = candidates[0]
+
+    res = common_actions.execute_rpc("VideoLibrary.GetEpisodes", {"tvshowid": int(show_id), "properties": ["season", "episode", "seasonid"]})
+    episodes = {(e.get('season'), e.get('episode')): e for e in res.get('result', {}).get('episodes', [])}
+    status = _remap_status(old.get('status') or {}, show_id, episodes)
+    if status is None:
+        xbmc.log(f"nICo Context: [{tag}] Profile adoption skipped — saved episode of profile {old_id} not in show {show_id}", xbmc.LOGINFO)
+        return False
+    history = [h for h in (_remap_status(h, show_id, episodes) for h in old.get('history', [])) if h is not None]
+
+    profile = {
+        "info": {"show_name": show_title, "show_id": int(show_id), "adopted_from": old_id},
+        "status": status,
+        "priority_stack": old.get('priority_stack', ["smart_play", "resume_native", "play_beginning", "view_history"]),
+        "history": history
+    }
+    try:
+        tmp = new_path + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(profile, f, indent=2, ensure_ascii=False)
+        os.replace(tmp, new_path)
+        os.remove(profile_path(old_id))
+    except Exception as ex:
+        xbmc.log(f"nICo Context: [{tag}] Profile adoption failed: {ex}", xbmc.LOGERROR)
+        return False
+    xbmc.log(f"nICo Context: [{tag}] Adopted profile {old_id} -> {show_id} ({len(history)} history entries kept)", xbmc.LOGINFO)
+    return True
 
 
 def persist_show():
@@ -81,6 +191,8 @@ def persist_show_by_id(dbid, dbtype, silent=False, automated=False, create_only=
     if not show_id:
         xbmc.log(f"nICo Context: [PERSIST] Aborted — no show ID for {dbtype} {dbid}", xbmc.LOGWARNING)
         return
+
+    adopt_orphan_profile(show_id)  # no-op unless the show was recreated under a new ID
 
     if create_only and os.path.exists(profile_path(show_id)):
         xbmc.log(f"nICo Context: [PERSIST] Profile exists for show {show_id}, create_only — nothing written", xbmc.LOGDEBUG)

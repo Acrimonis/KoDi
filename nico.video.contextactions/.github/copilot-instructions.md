@@ -27,9 +27,9 @@ Each action is a standalone script invoked directly by Kodi via `RunScript()` or
 | `resources/lib/move_to_top.py` | Move to Top |
 | `resources/lib/refresh_local.py` | Refresh (Local NFO) |
 | `resources/lib/refresh_internet.py` | Refresh (Internet scraper) |
-| `resources/lib/smart_cmd.py` | Persist • Save Show Profile (also called by `service.py`: on episode start if no profile, every 30s while playing, on stop/end) |
-| `resources/lib/smart_play.py` | Smart Play — bound to the remote Play button via keymap, not a menu entry; resumes from `{showid}.json` or falls back to the key's original action (`PlayPause`, overridable by script argument) |
-| `resources/lib/service.py` | Background service (loop 0.1s): tracks episode playback position (1s samples, 30s writes) and ticks the library navigator |
+| `resources/lib/smart_cmd.py` | Persist • Save Show Profile (also called by `service.py`: on episode start if no profile, every 30s while playing, on stop/end). Also `load_profile`, `adopt_orphan_profile` (takes over the profile of a show that Refresh (Internet) recreated under a new ID: same show name, old ID gone from the library, exactly one match; episodes remapped by season/episode) and `min_resume_seconds` (Kodi's `video.ignoresecondsatstart`, default 180) |
+| `resources/lib/smart_play.py` | Smart Play — bound to the remote Play button via keymap, not a menu entry; `in_progress` → resume the saved episode (episode opened alone with the resume time, later episodes appended to the video playlist afterwards because playlist items ignore the resume time; ignored if Kodi's resume point is empty and the saved position is past the Kodi minimum), `completed` → next unwatched episode, otherwise the key's original action (`PlayPause`, overridable by script argument) |
+| `resources/lib/service.py` | Background service (loop 0.1s): tracks episode playback position (1s samples, 30s writes), ticks the library navigator, and on autoplay (an episode starting < 10s after another's end) with a saved position ≥ 30s pauses and shows Kodi's resume context menu (Resume from mm:ss / Restart; first entry default, cancel = resume; position from profile status/history, else Kodi's resume point) |
 | `resources/lib/nav_focus.py` | Library navigation: on entering a show/season in the Videos window, moves the cursor to the saved season/episode from `{showid}.json` (`SetFocus`); used by `service.py` |
 | `resources/lib/common_locks.py` (run as script) | nICo Dev • Reload Modules |
 
