@@ -70,12 +70,13 @@ Bookmarks where you are in a show by writing a profile to `addon_data/nico.video
 ### Smart Play
 Replaces the regular **Play** on a TV show or season. Bound to the remote's Play button through a keymap (see "Smart Play on the remote's Play button" below); not a context menu entry. Reads that show's `{showid}.json`:
 - `in_progress` (or a manual save) on an episode in scope → play that episode, starting 5 seconds before the saved position.
-- Anything else → Kodi's default play: `completed`, no resume data, saved episode missing from the library, or (season active) saved episode in another season.
+- `completed` → plays the next unwatched episode: the first unwatched one after the saved episode, else the first unwatched one of the show (season 0 last; with a season active, only that season). It starts at that episode's library resume point minus 5 seconds, or at 0, without Kodi's resume prompt. Nothing unwatched → Kodi's default play.
+- Anything else → Kodi's default play: no resume data, saved episode missing from the library, or (season active) saved episode in another season.
 - No profile → one is created from the library first (`"source": "derived"`): the most recently played episode (resume point, or dated but unwatched → `in_progress`; watched → `completed`), or the first unwatched episode if the show was never played (season 0 last).
 - Any other item (movie, episode, non-library), or a video already playing/paused → Kodi's default play, unchanged.
 - "Kodi's default play" = the button's original action, `PlayPause` (what Kodi's default keymaps bind to the remote's `play` and the keyboard's `play_pause`). Another action can be passed as a script argument: `RunScript(…/smart_play.py,Play)`.
-- Notification when it resumes from the profile: `Smart resume • S01E01 at 9:17` (start position, i.e. saved − 5s); suffix `(from Kodi)` when the profile was just built from Kodi's watch history (`"source": "derived"`). Fallbacks show nothing (Kodi's default play).
-- Playback starts with `Player.Open` and an explicit resume time. The start position is checked after playback begins; if Kodi ignored the resume time, the script seeks. Everything is logged under `[SMART_PLAY:<show>]`.
+- Notification when it resumes from the profile: `Smart resume • S01E01 at 9:17` (start position, i.e. saved − 5s); suffix `(from Kodi)` when the profile was just built from Kodi's watch history (`"source": "derived"`). When it plays the next episode after a `completed` one: `Smart resume • S01E04 (next)`. Fallbacks show nothing (Kodi's default play).
+- The episode is opened on its own with an explicit resume time (Kodi ignores the resume time for playlist items, so a playlist start would begin at 0 and then jump). Once it plays, every later episode of the show (season 0 last) is appended to the video playlist, so Kodi's "Play next video automatically" (Settings → Player → Videos) moves on to the next episode. The start position is checked after playback begins; if Kodi ignored the resume time, the script seeks. Everything is logged under `[SMART_PLAY:<show>]`.
 
 ### Concurrent Action Safety
 All actions use a **per-show file-based mutex** (`{showid}_{pid}.lock` in Kodi's temp dir) to prevent two operations running on the same show at the same time.

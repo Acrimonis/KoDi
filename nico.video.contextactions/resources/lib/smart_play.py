@@ -47,6 +47,21 @@ def _derive_profile(show_id, tag):
     return smart_cmd.load_profile(show_id)
 
 
+def _next_unwatched(show_id, after_id, season_num, tag):
+    """First unwatched episode after `after_id`, else the first unwatched one (Kodi's own pick)."""
+    episodes = common_actions.get_episodes(show_id, 'tvshow', extra_props=["playcount", "episode", "resume"])
+    if season_num is not None:
+        episodes = [e for e in episodes if e.get('season') == season_num]
+    episodes.sort(key=_episode_order)
+    ids = [e['episodeid'] for e in episodes]
+    if after_id in ids:
+        later = [e for e in episodes[ids.index(after_id) + 1:] if not e.get('playcount')]
+        if later:
+            return later[0]
+    unwatched = [e for e in episodes if not e.get('playcount')]
+    return unwatched[0] if unwatched else None
+
+
 def _time_obj(seconds):
     s = int(seconds)
     return {"hours": s // 3600, "minutes": s % 3600 // 60, "seconds": s % 60, "milliseconds": int((seconds - s) * 1000)}
@@ -58,11 +73,40 @@ def _clock(seconds):
     return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
 
 
-def _play_at(episode_id, start, tag, show_title, detail):
+_VIDEO_PLAYLIST = 1
+
+
+def _queue_rest_of_show(show_id, episode_id, tag):
+    """Append every episode after episode_id to the video playlist, once episode_id is playing.
+
+    Player.Open with a playlist ignores the resume time, so the episode is opened on its own
+    (resume honored); Kodi's playlist then holds only that episode. Appending the later episodes
+    gives "play next video automatically" something to advance to.
+    """
+    episodes = common_actions.get_episodes(show_id, 'tvshow', extra_props=["episode"])
+    episodes.sort(key=_episode_order)
+    ids = [e['episodeid'] for e in episodes]
+    if episode_id not in ids:
+        return
+    later = ids[ids.index(episode_id) + 1:]
+    if not later:
+        return
+    current = common_actions.execute_rpc("Playlist.GetItems", {"playlistid": _VIDEO_PLAYLIST})
+    items = current.get('result', {}).get('items', [])
+    xbmc.log(f"nICo Context: [{tag}] Playlist before append: {len(items)} item(s) {items}", xbmc.LOGINFO)
+    if len(items) != 1:
+        xbmc.log(f"nICo Context: [{tag}] Playlist is not just the playing episode — not appending", xbmc.LOGWARNING)
+        return
+    res = common_actions.execute_rpc("Playlist.Add", {"playlistid": _VIDEO_PLAYLIST,
+                                                      "item": [{"episodeid": i} for i in later]})
+    xbmc.log(f"nICo Context: [{tag}] Playlist.Add {len(later)} episodes after {episode_id} -> {res}", xbmc.LOGINFO)
+
+
+def _play_at(show_id, episode_id, start, tag, show_title, detail):
     """Open the episode at `start` seconds. Logs everything so the behavior can be verified in kodi.log."""
-    res = common_actions.execute_rpc("Player.Open", {"item": {"episodeid": episode_id},
-                                                     "options": {"resume": _time_obj(start)}})
-    xbmc.log(f"nICo Context: [{tag}] Player.Open episode={episode_id} start={start:.1f}s -> {res}", xbmc.LOGINFO)
+    item = {"episodeid": episode_id}
+    res = common_actions.execute_rpc("Player.Open", {"item": item, "options": {"resume": _time_obj(start)}})
+    xbmc.log(f"nICo Context: [{tag}] Player.Open {item} start={start:.1f}s -> {res}", xbmc.LOGINFO)
     if res.get('result') != 'OK':
         res = common_actions.execute_rpc("Player.Open", {"item": {"episodeid": episode_id}})
         xbmc.log(f"nICo Context: [{tag}] Player.Open without resume (fallback) -> {res}", xbmc.LOGINFO)
@@ -89,6 +133,10 @@ def _play_at(episode_id, start, tag, show_title, detail):
     if abs(actual - start) > 10:
         player.seekTime(start)
         xbmc.log(f"nICo Context: [{tag}] Resume time not honored — seekTime({start:.1f}) fallback", xbmc.LOGINFO)
+    try:
+        _queue_rest_of_show(show_id, episode_id, tag)
+    except Exception as e:
+        xbmc.log(f"nICo Context: [{tag}] Could not queue the rest of the show: {e}", xbmc.LOGWARNING)
     common_locks.notification(show_title, f"Smart resume{common_locks.DOT_SPC}{detail}",
                               xbmcgui.NOTIFICATION_INFO, 2500)
 
@@ -123,6 +171,15 @@ def smart_play():
 
     resume = (profile or {}).get('status', {}).get('resume') or {}
     strategy, episode_id = resume.get('strategy'), resume.get('episode_id')
+    if strategy == 'completed':
+        nxt = _next_unwatched(show_id, episode_id, season_num, tag)
+        if not nxt:
+            return _default_play(tag, "completed, nothing unwatched")
+        position = (nxt.get('resume') or {}).get('position', 0)
+        start = max(0.0, position - _REWIND_SECONDS) if position > 0 else 0.0
+        xbmc.log(f"nICo Context: [{tag}] Completed — next unwatched episode={nxt['episodeid']} start={start:.1f}s", xbmc.LOGINFO)
+        detail = f"S{nxt.get('season', 0):02d}E{nxt.get('episode', 0):02d} (next)"
+        return _play_at(show_id, nxt['episodeid'], start, tag, show_title, detail)
     if strategy not in ('in_progress', 'manual_save') or not episode_id:
         return _default_play(tag, f"strategy={strategy}")
 
@@ -137,7 +194,7 @@ def smart_play():
     detail = f"S{ep.get('season', 0):02d}E{ep.get('episode', 0):02d} at {_clock(start)}"
     if profile.get('status', {}).get('source') == 'derived':
         detail += " (from Kodi)"  # profile built from Kodi's watch history, not saved by the addon
-    _play_at(int(episode_id), start, tag, show_title, detail)
+    _play_at(show_id, int(episode_id), start, tag, show_title, detail)
 
 
 if __name__ == '__main__':
