@@ -6,7 +6,10 @@ import time
 # Ensure resources/lib is in the path for imports
 sys.path.append(os.path.dirname(__file__))
 import smart_cmd
+import nav_focus
 
+_LOOP_SECONDS = 0.1  # service loop period (library navigation reacts at this rate)
+_PLAYER_TICK_EVERY = 10  # player position sampled every 10 loops = 1s
 _TICK_SECONDS = 30  # periodic profile write while an episode plays
 _COMPLETED_RATIO = 0.92  # position >= 92% of duration counts as completed (Kodi's default watched threshold)
 
@@ -100,10 +103,15 @@ class nICoService(xbmc.Monitor):
     def __init__(self):
         super().__init__()
         self.player = nICoPlayer()
+        self.navigator = nav_focus.FocusNavigator()
 
 if __name__ == '__main__':
     xbmc.log("nICo Service: Background playback monitor started", xbmc.LOGINFO)
     monitor = nICoService()
-    while not monitor.waitForAbort(1):
-        monitor.player.tick()
+    loops = 0
+    while not monitor.waitForAbort(_LOOP_SECONDS):
+        monitor.navigator.tick()
+        loops += 1
+        if loops % _PLAYER_TICK_EVERY == 0:
+            monitor.player.tick()
     monitor.player.on_exit()

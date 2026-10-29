@@ -25,7 +25,7 @@ Working log for addon changes. Updated after each confirmed step.
 
 | # | Step | State |
 |---|------|-------|
-| A | Live verify (see "Verification checklist") | in progress (local) — passed 2, 4, 5, 7, 9 (season), 10, 12, 13, 14*, 11*; partial 8; open 1, 3, 6, 9 (movie) (*user-reported, not yet in `kodi.log`) |
+| A | Live verify (see "Verification checklist") | closed 2026-10-29 for 1.0.9 — passed 2, 4, 5, 7, 9 (season), 10, 12, 13, 14*, 11*; partial 8; open 1, 3, 6, 9 (movie) (*user-reported, not yet in `kodi.log`) |
 | H | Fixes from code review R1–R5 (see "Review (2026-10-29)") | done — R3 fallback seen (`Default play (Play)`); R1, R2, R4 untested |
 | B | Persist fixes (`smart_cmd.py`, `service.py`): automatic save for `episode` only; abort without show ID; automatic mode takes the show title from the library; create profile silently on playback start if none exists | done — verified live (checklist 2) |
 | C | Position tracking (`service.py`): sample every 1s in memory, write every 30s (silent, no fsync, skipped when paused/unchanged), stop = exact last sample, end = `completed` | done — stop/end verified live; ticks not yet (checklist 3) |
@@ -33,7 +33,9 @@ Working log for addon changes. Updated after each confirmed step.
 | D2 | Smart Play: open the single episode with resume (no start at 0.1s + seek), append later episodes to the video playlist after playback starts (only if the playlist is exactly the playing episode); `completed` → play the next unwatched episode (first unwatched after the saved one, else first unwatched; season scope; resume point − 5s or 0; toast `S01E04 (next)`; nothing unwatched → Kodi's default play) | done — user-reported working 2026-10-29; not yet checked in `kodi.log` (look for `Playlist before append`, `Completed — next unwatched`) |
 | E | Snapshot fix: `common_locks.update_snapshot_entries`, called by `watched_past.py` and `move_to_top.py` | done — untested in Kodi |
 | F | README: per-entry visibility table, Persist/Smart Play sections, remote keymap example | done |
-| G | Release 1.0.8: version bumped in `addon.xml` and README; work committed 2026-10-29 (not pushed); zip + push held until A passes | partial |
+| I | Navigation to the saved season/episode (`nav_focus.py`, service loop 0.1s) | done — user-reported working |
+| J | Smart Play ignores an `in_progress` profile when the library resume point is empty | done — user-reported working |
+| G | Release: 1.0.8 was never zipped; superseded by **1.0.9** (2026-10-29): version bumped in `addon.xml` and README, `nico.video.contextactions-1.0.9.zip` generated (addon files only, no dev docs), deployed to QPC (`deploy-qpc.bat`), committed and pushed. Step A closed with items 3, 6, 9 (movie), 11 (queued) unproven/skipped by decision | done |
 
 Implementation notes (2026-10-28):
 - Syntax checked with Python 3.8 grammar only (`ast.parse`); no runtime test outside Kodi.
@@ -67,14 +69,20 @@ Checked, no change needed:
 - `create_only`, history archiving (ticks don't archive; first write for a new episode does), derived-profile rules match the plan; `source` is dropped by the next non-derived write.
 - Reloader imports `move_to_top`, `smart_play`.
 
-### Navigation to the saved path (proposed, not started)
+### Navigation to the saved path (step I, done 2026-10-29, user-reported working)
 
-Goal: entering a show lands on the saved season, entering a season lands on the saved episode (the cursor is pre-selected; nothing starts playing).
+Entering a show selects the saved season, entering a season selects the saved episode (cursor only; nothing plays).
 
-- Data already in `{showid}.json`: `status.paths.{show,season,episode}` (`videodb://` paths), `season_num`, `episode_num`, `episode_id`. Nothing reads them yet.
-- Mechanism (to verify): a service loop (the existing 1s one) watches `Container.FolderPath`. When it changes to a show's season list (`videodb://tvshows/titles/{id}/`) or a season's episode list, and the profile is `in_progress` or `manual_save`, it moves the focus to the item whose `ListItem.DBID` matches. Focus setting is skin-dependent (container control ID from `System.CurrentControlID`, then `SetFocus(id, index)`), so it must be tested on the user's skin.
-- Alternative: bind Enter/Select in the Videos window to a script that opens the saved path directly (`ActivateWindow(Videos, <path>)`); no focus juggling, but it changes Enter for every item, so it must pass everything else through.
-- Decisions needed: (1) levels: show → season only, or also season → episode; (2) trigger: automatic on entering, or only via a key; (3) when the profile is `completed`: do nothing (Kodi's default) or select the next unwatched episode; (4) release: 1.0.8 or 1.0.9.
+- Decided: both levels; automatic on entering (no key); `completed` profile → next unwatched episode (same pick as Smart Play; in a season list, that episode's season); release 1.0.9.
+- `nav_focus.py` (`FocusNavigator`), ticked by the service loop. The loop now runs every 0.1s (`_LOOP_SECONDS`); player sampling stays at 1s (every 10th loop). Reacts when `Container.FolderPath` changes in the Videos window to `videodb://tvshows/titles/{id}/` (season list) or `…/{id}/{n}/` (episode list). Waits up to 8s for the list (`Container.IsUpdating`, `NumItems`), finds the item (`Season` label for seasons, `DBID` for episodes), `SetFocus(<view>,<index>,absolute)` on the visible standard view container (tested on skin Amber).
+- Not re-triggered when going back up a level (parent path of the previous one), when returning from playback or non-Videos windows, or on list refresh (path unchanged). Empty paths ignored.
+- The season segment of `videodb://` paths is not trusted (profile shows 18 for season 1): seasons are matched by `ListItem.Season`.
+- Needs a Kodi restart after an update (service). `smart_play._next_unwatched` renamed `next_unwatched` (used by `nav_focus`).
+- Visual lag: 1s polling replaced by 0.1s; a flash of the first item before the jump remains possible (Kodi draws the list first).
+
+### Smart Play: library resume point reset (step J, done 2026-10-29, user-reported working)
+
+An `in_progress` profile with position > 0 is ignored (start at 0) when the episode's library resume point is empty (reset, marked watched). `manual_save` still honored; `completed` unchanged. Trade-off: if Kodi quits/crashes during playback without storing its resume point, the profile's last position is ignored too (log: `Library resume point is empty`).
 
 ### Verification checklist (step A)
 

@@ -1,7 +1,7 @@
 # nICo Video Context Actions for Kodi
 
 **Addon ID:** `nico.video.contextactions`  
-**Version:** 1.0.8 
+**Version:** 1.0.9
 **Author:** nICo BaD  
 **License:** GPL-2.0-only
 
@@ -65,11 +65,12 @@ Bookmarks where you are in a show by writing a profile to `addon_data/nico.video
   - In automatic saves the show name comes from the library, not the focused list item.
 - **Notification:** `Location bookmarked.` (manual, show/season) or `Season 02 Episode 05 • Progress saved (37%)` (manual on an episode, and automatic stop/end). Start and 30-second writes are silent.
 - **Location:** `special://profile/addon_data/nico.video.contextactions/{showid}.json` (portable install: `<portable_data>\userdata\addon_data\nico.video.contextactions\`). The folder is created on first write.
-- Read by Smart Play.
+- Read by Smart Play and by library navigation.
+- **Known limitation:** profiles are keyed by the show's database ID. Refresh (Internet) can recreate a show with a new ID; the old profile is then orphaned and Smart Play builds a new one from Kodi's watch history (history and manual saves are lost).
 
 ### Smart Play
 Replaces the regular **Play** on a TV show or season. Bound to the remote's Play button through a keymap (see "Smart Play on the remote's Play button" below); not a context menu entry. Reads that show's `{showid}.json`:
-- `in_progress` (or a manual save) on an episode in scope → play that episode, starting 5 seconds before the saved position.
+- `in_progress` (or a manual save) on an episode in scope → play that episode, starting 5 seconds before the saved position. If Kodi's own resume point for that episode is empty (reset, marked watched), an `in_progress` profile is ignored and the episode starts at 0; a manual save is still honored.
 - `completed` → plays the next unwatched episode: the first unwatched one after the saved episode, else the first unwatched one of the show (season 0 last; with a season active, only that season). It starts at that episode's library resume point minus 5 seconds, or at 0, without Kodi's resume prompt. Nothing unwatched → Kodi's default play.
 - Anything else → Kodi's default play: no resume data, saved episode missing from the library, or (season active) saved episode in another season.
 - No profile → one is created from the library first (`"source": "derived"`): the most recently played episode (resume point, or dated but unwatched → `in_progress`; watched → `completed`), or the first unwatched episode if the show was never played (season 0 last).
@@ -77,6 +78,16 @@ Replaces the regular **Play** on a TV show or season. Bound to the remote's Play
 - "Kodi's default play" = the button's original action, `PlayPause` (what Kodi's default keymaps bind to the remote's `play` and the keyboard's `play_pause`). Another action can be passed as a script argument: `RunScript(…/smart_play.py,Play)`.
 - Notification when it resumes from the profile: `Smart resume • S01E01 at 9:17` (start position, i.e. saved − 5s); suffix `(from Kodi)` when the profile was just built from Kodi's watch history (`"source": "derived"`). When it plays the next episode after a `completed` one: `Smart resume • S01E04 (next)`. Fallbacks show nothing (Kodi's default play).
 - The episode is opened on its own with an explicit resume time (Kodi ignores the resume time for playlist items, so a playlist start would begin at 0 and then jump). Once it plays, every later episode of the show (season 0 last) is appended to the video playlist, so Kodi's "Play next video automatically" (Settings → Player → Videos) moves on to the next episode. The start position is checked after playback begins; if Kodi ignored the resume time, the script seeks. Everything is logged under `[SMART_PLAY:<show>]`.
+
+### Library navigation to the saved position
+When you enter a show or a season in the video library, the cursor jumps to where you left off. Nothing starts playing; only the selection moves. Done by the background service (`nav_focus.py`, polling every 0.1s while the Videos window is open).
+- **Show (season list):** selects the saved season.
+- **Season (episode list):** selects the saved episode.
+- **Profile `completed`:** selects the next unwatched episode (same pick as Smart Play); in a season list, that episode's season.
+- No profile, or the saved item isn't in the list → nothing moves.
+- It acts once when the folder is entered. Going back up a level, returning from playback, and refreshing the list don't re-trigger it, so Kodi's own cursor restore is untouched.
+- Focus is set on the visible standard view container (IDs 50–58, 501, 502, 511, 551, 600); tested on skin Amber. A short flash of the first item before the jump is possible, since Kodi draws the list first.
+- Logged as `[NAV:<showid>]`. Needs a Kodi restart after an update (service).
 
 ### Concurrent Action Safety
 All actions use a **per-show file-based mutex** (`{showid}_{pid}.lock` in Kodi's temp dir) to prevent two operations running on the same show at the same time.

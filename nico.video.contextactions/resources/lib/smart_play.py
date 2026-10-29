@@ -47,7 +47,7 @@ def _derive_profile(show_id, tag):
     return smart_cmd.load_profile(show_id)
 
 
-def _next_unwatched(show_id, after_id, season_num, tag):
+def next_unwatched(show_id, after_id, season_num, tag):
     """First unwatched episode after `after_id`, else the first unwatched one (Kodi's own pick)."""
     episodes = common_actions.get_episodes(show_id, 'tvshow', extra_props=["playcount", "episode", "resume"])
     if season_num is not None:
@@ -172,7 +172,7 @@ def smart_play():
     resume = (profile or {}).get('status', {}).get('resume') or {}
     strategy, episode_id = resume.get('strategy'), resume.get('episode_id')
     if strategy == 'completed':
-        nxt = _next_unwatched(show_id, episode_id, season_num, tag)
+        nxt = next_unwatched(show_id, episode_id, season_num, tag)
         if not nxt:
             return _default_play(tag, "completed, nothing unwatched")
         position = (nxt.get('resume') or {}).get('position', 0)
@@ -183,14 +183,19 @@ def smart_play():
     if strategy not in ('in_progress', 'manual_save') or not episode_id:
         return _default_play(tag, f"strategy={strategy}")
 
-    res = common_actions.execute_rpc("VideoLibrary.GetEpisodeDetails", {"episodeid": int(episode_id), "properties": ["tvshowid", "season", "episode"]})
+    res = common_actions.execute_rpc("VideoLibrary.GetEpisodeDetails", {"episodeid": int(episode_id), "properties": ["tvshowid", "season", "episode", "resume"]})
     ep = res.get('result', {}).get('episodedetails')
     if not ep or ep.get('tvshowid') != show_id:
         return _default_play(tag, f"saved episode {episode_id} not in library")
     if season_num is not None and ep.get('season') != season_num:
         return _default_play(tag, f"saved episode is in season {ep.get('season')}, not {season_num}")
 
-    start = max(0.0, float(resume.get('position', 0)) - _REWIND_SECONDS)
+    position = float(resume.get('position', 0))
+    if strategy == 'in_progress' and position > 0 and not (ep.get('resume') or {}).get('position'):
+        # Kodi's resume point was cleared (reset / marked watched / never stored): start over
+        xbmc.log(f"nICo Context: [{tag}] Library resume point is empty — ignoring saved position {position:.1f}s", xbmc.LOGINFO)
+        position = 0.0
+    start = max(0.0, position - _REWIND_SECONDS)
     detail = f"S{ep.get('season', 0):02d}E{ep.get('episode', 0):02d} at {_clock(start)}"
     if profile.get('status', {}).get('source') == 'derived':
         detail += " (from Kodi)"  # profile built from Kodi's watch history, not saved by the addon

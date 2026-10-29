@@ -29,7 +29,8 @@ Each action is a standalone script invoked directly by Kodi via `RunScript()` or
 | `resources/lib/refresh_internet.py` | Refresh (Internet scraper) |
 | `resources/lib/smart_cmd.py` | Persist • Save Show Profile (also called by `service.py`: on episode start if no profile, every 30s while playing, on stop/end) |
 | `resources/lib/smart_play.py` | Smart Play — bound to the remote Play button via keymap, not a menu entry; resumes from `{showid}.json` or falls back to the key's original action (`PlayPause`, overridable by script argument) |
-| `resources/lib/service.py` | Background service: tracks episode playback position (1s samples, 30s writes) |
+| `resources/lib/service.py` | Background service (loop 0.1s): tracks episode playback position (1s samples, 30s writes) and ticks the library navigator |
+| `resources/lib/nav_focus.py` | Library navigation: on entering a show/season in the Videos window, moves the cursor to the saved season/episode from `{showid}.json` (`SetFocus`); used by `service.py` |
 | `resources/lib/common_locks.py` (run as script) | nICo Dev • Reload Modules |
 
 ### Shared modules
