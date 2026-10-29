@@ -1,45 +1,100 @@
 import xbmc
 import sys
 import os
+import time
 
 # Ensure resources/lib is in the path for imports
 sys.path.append(os.path.dirname(__file__))
 import smart_cmd
 
+_TICK_SECONDS = 30  # periodic profile write while an episode plays
+_COMPLETED_RATIO = 0.92  # position >= 92% of duration counts as completed (Kodi's default watched threshold)
+
+
 class nICoPlayer(xbmc.Player):
     def __init__(self):
         super().__init__()
+        self._reset()
+
+    def _reset(self):
         self._active_id = None
-        self._active_type = None
+        self._position = None       # last sampled player position (s), in memory only
+        self._duration = None
+        self._written_position = None
+        self._next_write = 0
 
     def onPlayBackStarted(self):
+        # Previous episode got no Stopped/Ended (playlist advance, Player.Open over it): save it now
+        if self._active_id:
+            self._persist("Switched", 'in_progress', silent=True)
         # Allow metadata to populate
         xbmc.sleep(500)
+        self._reset()
         tag = self.getVideoInfoTag()
-        self._active_id = tag.getDbId()
-        self._active_type = tag.getMediaType()
-        
-        if self._active_id and self._active_id != -1:
-            xbmc.log(f"nICo Service: Tracking playback for {self._active_type} (ID: {self._active_id})", xbmc.LOGDEBUG)
+        dbid, media_type = tag.getDbId(), tag.getMediaType()
+        # Profiles are per show: only library episodes are tracked
+        if media_type != 'episode' or not dbid or dbid == -1:
+            return
+        self._active_id = dbid
+        self._next_write = time.time() + _TICK_SECONDS
+        xbmc.log(f"nICo Service: Tracking playback for episode (ID: {dbid})", xbmc.LOGINFO)
+        try:
+            # Show has no profile yet: create it now (silent, library resume point) so a crash still leaves one
+            smart_cmd.persist_show_by_id(dbid, 'episode', silent=True, automated=True,
+                                         create_only=True, strategy='in_progress')
+        except Exception as e:
+            xbmc.log(f"nICo Service: Start persist failed: {e}", xbmc.LOGERROR)
 
     def onPlayBackStopped(self):
-        self._trigger_persist("Stopped")
+        if self._active_id:
+            self._persist("Stopped", 'in_progress', silent=False)
+        self._reset()
 
     def onPlayBackEnded(self):
-        self._trigger_persist("Ended")
+        if self._active_id:
+            self._persist("Ended", 'completed', silent=False)
+        self._reset()
 
-    def _trigger_persist(self, event):
-        if self._active_id and self._active_id != -1 and self._active_type:
-            xbmc.log(f"nICo Service: Playback {event} detected. Updating profile for {self._active_type} (ID: {self._active_id})...", xbmc.LOGINFO)
-            try:
-                # Call with silent=False per request, and automated=True for strategy logic
-                smart_cmd.persist_show_by_id(self._active_id, self._active_type, silent=False, automated=True)
-            except Exception as e:
-                xbmc.log(f"nICo Service: Background persist failed for {event}: {e}", xbmc.LOGERROR)
-        
-        # Reset state for next playback
-        self._active_id = None
-        self._active_type = None
+    def tick(self):
+        """Called every second by the service loop: sample the position, write every _TICK_SECONDS."""
+        if not self._active_id or not self.isPlayingVideo():
+            return
+        try:
+            self._position = self.getTime()
+            self._duration = self.getTotalTime()
+        except Exception:
+            return
+        if time.time() < self._next_write:
+            return
+        self._next_write = time.time() + _TICK_SECONDS
+        if xbmc.getCondVisibility('Player.Paused') or self._position == self._written_position:
+            return
+        self._persist("Tick", 'in_progress', silent=True, durable=False)
+
+    def on_exit(self):
+        """Kodi is quitting: Stopped is not delivered, so save the last sample (best-effort)."""
+        if self._active_id:
+            self._persist("Exit", 'in_progress', silent=True)
+        self._reset()
+
+    def _persist(self, event, strategy, silent, durable=True):
+        if (strategy == 'in_progress' and self._position is not None and self._duration
+                and self._position >= self._duration * _COMPLETED_RATIO):
+            strategy = 'completed'
+        # completed: no position, persist_show_by_id uses the full duration
+        position = self._position if strategy == 'in_progress' else None
+        quiet = event == "Tick"
+        xbmc.log(f"nICo Service: Playback {event} — updating profile for episode (ID: {self._active_id}) "
+                 f"strategy={strategy} position={position} duration={self._duration}",
+                 xbmc.LOGDEBUG if quiet else xbmc.LOGINFO)
+        try:
+            smart_cmd.persist_show_by_id(self._active_id, 'episode', silent=silent, automated=True,
+                                         position=position, duration=self._duration,
+                                         strategy=strategy, durable=durable, quiet=quiet)
+            self._written_position = position
+        except Exception as e:
+            xbmc.log(f"nICo Service: Background persist failed for {event}: {e}", xbmc.LOGERROR)
+
 
 class nICoService(xbmc.Monitor):
     def __init__(self):
@@ -49,5 +104,6 @@ class nICoService(xbmc.Monitor):
 if __name__ == '__main__':
     xbmc.log("nICo Service: Background playback monitor started", xbmc.LOGINFO)
     monitor = nICoService()
-    while not monitor.waitForAbort(10):
-        pass
+    while not monitor.waitForAbort(1):
+        monitor.player.tick()
+    monitor.player.on_exit()

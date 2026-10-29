@@ -1,7 +1,7 @@
 # nICo Video Context Actions for Kodi
 
 **Addon ID:** `nico.video.contextactions`  
-**Version:** 1.0.7 
+**Version:** 1.0.8 
 **Author:** nICo BaD  
 **License:** GPL-2.0-only
 
@@ -51,12 +51,31 @@ Refreshes the selected item's metadata using local NFO files (equivalent to `ign
 
 ### Persist • Save Show Profile
 Bookmarks where you are in a show by writing a profile to `addon_data/nico.video.contextactions/{showid}.json`. Available for TV Shows, Seasons and Episodes.
-- **Content:** show name/ID, readable location (`Show • Season 2 • Episode 5`), timestamp, `videodb://` paths (show/season/episode), episode title, and for episodes the resume info (position, total, percentage, strategy). Keeps the last 5 previous locations in `history`; a location is archived only when it changed.
+- **Content:** show name/ID, readable location (`Show • Season 2 • Episode 5`), timestamp, `videodb://` paths (show/season/episode), episode title, and for episodes the resume info (position, total, percentage, strategy). Keeps the last 5 previous locations in `history`; a location is archived only when it changed. Profiles built by Smart Play carry `"source": "derived"`.
 - **Triggers:**
   - **Manual:** the context menu entry (strategy `manual_save`).
-  - **Automatic:** a background service (`service.py`, starts with Kodi) watches playback. When playback **stops** or **ends** it saves the profile of the item that was playing (strategy `in_progress` if a resume position exists, otherwise `completed`).
-- **Notification:** `Location bookmarked.` (manual, show/season) or `Season 02 Episode 05 • Progress saved (37%)` (episodes and automatic saves).
-- The profile is written only; nothing in this addon reads it yet.
+  - **Automatic:** a background service (`service.py`, starts with Kodi) watches playback of **library episodes only** (movies are ignored):
+    - **Start:** if the show has no profile yet, one is created silently (`in_progress`, library resume point). An existing profile is not touched at start.
+    - **While playing:** the position is sampled every second in memory and the profile is written silently every 30 seconds (`in_progress`), skipped while paused or if the position hasn't changed.
+    - **Stop:** `in_progress` at the exact last position.
+    - **End:** `completed`.
+    - **Next item starts without a stop/end** (playlist advance, Smart Play over a playing episode): the previous episode is saved silently at its last position first.
+    - **Kodi quits during playback:** the last position is saved silently (best-effort; Kodi does not report a stop on exit).
+    - Any automatic save at ≥ 92% of the duration is recorded as `completed` (Kodi's default watched threshold), so a stop in the end credits is not resumed.
+  - In automatic saves the show name comes from the library, not the focused list item.
+- **Notification:** `Location bookmarked.` (manual, show/season) or `Season 02 Episode 05 • Progress saved (37%)` (manual on an episode, and automatic stop/end). Start and 30-second writes are silent.
+- **Location:** `special://profile/addon_data/nico.video.contextactions/{showid}.json` (portable install: `<portable_data>\userdata\addon_data\nico.video.contextactions\`). The folder is created on first write.
+- Read by Smart Play.
+
+### Smart Play
+Replaces the regular **Play** on a TV show or season. Bound to the remote's Play button through a keymap (see "Smart Play on the remote's Play button" below); not a context menu entry. Reads that show's `{showid}.json`:
+- `in_progress` (or a manual save) on an episode in scope → play that episode, starting 5 seconds before the saved position.
+- Anything else → Kodi's default play: `completed`, no resume data, saved episode missing from the library, or (season active) saved episode in another season.
+- No profile → one is created from the library first (`"source": "derived"`): the most recently played episode (resume point, or dated but unwatched → `in_progress`; watched → `completed`), or the first unwatched episode if the show was never played (season 0 last).
+- Any other item (movie, episode, non-library), or a video already playing/paused → Kodi's default play, unchanged.
+- "Kodi's default play" = the button's original action, `PlayPause` (what Kodi's default keymaps bind to the remote's `play` and the keyboard's `play_pause`). Another action can be passed as a script argument: `RunScript(…/smart_play.py,Play)`.
+- Notification when it resumes from the profile: `Smart resume • S01E01 at 9:17` (start position, i.e. saved − 5s); suffix `(from Kodi)` when the profile was just built from Kodi's watch history (`"source": "derived"`). Fallbacks show nothing (Kodi's default play).
+- Playback starts with `Player.Open` and an explicit resume time. The start position is checked after playback begins; if Kodi ignored the resume time, the script seeks. Everything is logged under `[SMART_PLAY:<show>]`.
 
 ### Concurrent Action Safety
 All actions use a **per-show file-based mutex** (`{showid}_{pid}.lock` in Kodi's temp dir) to prevent two operations running on the same show at the same time.
@@ -68,14 +87,19 @@ All actions use a **per-show file-based mutex** (`{showid}_{pid}.lock` in Kodi's
 
 ## Supported Item Types
 
-All five actions are visible in the context menu for:
+Context menu entries per item type (`addon.xml` visibility):
 
-| Type | DBType |
-|------|--------|
-| Movie | `movie` |
-| TV Show | `tvshow` |
-| Season | `season` |
-| Episode | `episode` |
+| Entry | Movie | TV Show | Season | Episode |
+|-------|:-----:|:-------:|:------:|:-------:|
+| • Refresh (Internet) | ✓ | ✓ | ✓ | ✓ |
+| • Refresh (Local) — *disabled* | – | – | – | – |
+| • Watched to Past... | – | ✓ | ✓ | ✓ |
+| • Watched Toggle | ✓ | ✓ | ✓ | ✓ |
+| • Move to Top | ✓ | ✓ | ✓ | ✓ |
+| nICo Dev • Reload Modules | ✓ | ✓ | ✓ | ✓ |
+| Persist • Save Show Profile | – | ✓ | ✓ | ✓ |
+
+Smart Play has no menu entry (remote Play button via keymap).
 
 ---
 
@@ -88,7 +112,7 @@ All five actions are visible in the context menu for:
 
 2. Restart Kodi or enable the addon via **Settings → Add-ons → My add-ons**.
 
-3. The five actions will appear automatically in the **right-click context menu** on any supported library item.
+3. The context menu entries appear automatically on supported library items (see Supported Item Types). Smart Play needs the keymap entry below.
 
 > A newly installed addon may be **disabled** (e.g. a fresh portable profile). If no entries appear, enable it in **Settings → Add-ons → My add-ons**.
 
@@ -96,7 +120,7 @@ All five actions are visible in the context menu for:
 
 ## Development
 
-- **Reload Modules:** the context menu entry `nICo Dev • Reload Modules` runs `resources/lib/common_locks.py`, which reloads the addon's cached Python modules without restarting Kodi (toast: `nICo Dev PlugiN: N modules reloaded`). Changes to `addon.xml` still require a Kodi restart.
+- **Reload Modules:** the context menu entry `nICo Dev • Reload Modules` runs `resources/lib/common_locks.py`, which reloads the addon's cached Python modules without restarting Kodi (toast: `nICo Dev PlugiN: N modules reloaded`). Changes to `addon.xml` and to the background service (`service.py`, `smart_cmd.py` as used by it) still require a Kodi restart.
 - **Deploy scripts** (repo root, `robocopy /MIR` into a Kodi addons folder, excluding `.git`, `.github`, `__pycache__`, `AGENTS.md`, `Tracking.md`, `*.zip`, `*.bat`):
   - `deploy.bat` → `D:\.kodi\portable_data\addons\nico.video.contextactions`
   - `deploy-qpc.bat` → `P:\.kodi_d\addons\nico.video.contextactions`
@@ -132,3 +156,22 @@ Add the following inside the `<keymap>` tags. This targets the Video Library spe
 ```
 
 > **Note for AZERTY Users:** Kodi maps keys based on physical position. The `<q>` tag corresponds to the key physically at the 'A' position on an AZERTY layout.
+
+### Smart Play on the remote's Play button
+
+Add inside `<Videos>` (same file, or `remote.xml`). Which tag fires depends on how the remote reaches Kodi:
+
+```xml
+<Videos>
+    <!-- CEC (TV remote over HDMI) and most remotes handled by Kodi's remote keymap -->
+    <remote>
+        <play>RunScript(special://home/addons/nico.video.contextactions/resources/lib/smart_play.py)</play>
+    </remote>
+    <!-- IR/MCE remotes on Windows usually send the keyboard media key instead -->
+    <keyboard>
+        <play_pause>RunScript(special://home/addons/nico.video.contextactions/resources/lib/smart_play.py)</play_pause>
+    </keyboard>
+</Videos>
+```
+
+To find out which one your remote sends: enable debug logging (**Settings → System → Logging**), press Play in the library, and look for the `OnKey` line in `kodi.log`. Phone remote apps (Kore, Yatse) call JSON-RPC directly and cannot be intercepted. Keymap changes need a Kodi restart.

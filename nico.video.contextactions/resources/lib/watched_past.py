@@ -160,6 +160,9 @@ def shift_watched_to_past():
             except Exception as e:
                 xbmc.log(f"nICo Context: [{tag}] SQL EXCEPTION: {e}", xbmc.LOGERROR)
 
+        # Intentional write: make it the snapshot truth so a restorer queued behind us keeps it
+        common_locks.update_snapshot_entries(root_id, {fid: target_str for fid in affected}, tag=tag)
+
         xbmc.log(
             f"nICo Context: [{tag}] shift: {len(nudge_eids)} RPC + {len(sql_idfiles)} SQL "
             f"in {common_actions._ms()-t0}ms | target={target_str}",

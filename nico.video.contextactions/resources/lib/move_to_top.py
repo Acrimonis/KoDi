@@ -68,6 +68,12 @@ def move_to_top():
             common_locks.notification(show_title, "Move to top failed", xbmcgui.NOTIFICATION_ERROR, 2500)
             return
 
+        if dbtype != 'movie':
+            # Intentional write: make it the snapshot truth so a restorer queued behind us keeps it
+            fid = common_actions._episodes_to_idfile([target], tag=tag).get(target['episodeid'])
+            if fid:
+                common_locks.update_snapshot_entries(root_id, {fid: now_str}, tag=tag)
+
         xbmc.log(f"nICo Context: [{tag}] Complete | lastPlayed={now_str} target={label or dbtype}", xbmc.LOGINFO)
         xbmc.executebuiltin('Container.Refresh')
         body = "Moved to top" + (f"{common_locks.DOT_SPC}{label}" if label else "")

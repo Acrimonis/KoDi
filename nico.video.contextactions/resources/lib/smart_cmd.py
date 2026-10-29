@@ -7,7 +7,20 @@ import xbmcvfs
 import common_locks
 import common_actions
 
+_CFG_DIR = 'special://profile/addon_data/nico.video.contextactions/'
 
+
+def profile_path(show_id):
+    return os.path.join(xbmcvfs.translatePath(_CFG_DIR), f"{show_id}.json")
+
+
+def load_profile(show_id):
+    """Return the saved profile dict for show_id, or None if missing/unreadable."""
+    try:
+        with open(profile_path(show_id), 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return None
 
 
 def persist_show():
@@ -18,8 +31,19 @@ def persist_show():
     persist_show_by_id(dbid, dbtype)
 
 
-def persist_show_by_id(dbid, dbtype, silent=False, automated=False):
-    """Refactored logic to support background events (no UI context) or direct ID calls."""
+def persist_show_by_id(dbid, dbtype, silent=False, automated=False, create_only=False,
+                       position=None, duration=None, strategy=None, source=None, durable=True, quiet=False):
+    """Refactored logic to support background events (no UI context) or direct ID calls.
+
+    automated:   called by the service / Smart Play; show title comes from the library, not ListItem.
+    create_only: write only if the show has no profile yet (playback start).
+    position, duration: playback position/total from the player; override the library resume point.
+    strategy:    force the resume strategy instead of deriving it.
+    source:      optional origin marker stored in status (e.g. "derived").
+    durable:     fsync the write; False for frequent periodic ticks.
+    quiet:       log the routine steps at DEBUG instead of INFO (periodic ticks).
+    """
+    info = xbmc.LOGDEBUG if quiet else xbmc.LOGINFO
     # Resolve hierarchy for path abstraction
     show_id = None
     season_id = None
@@ -29,7 +53,7 @@ def persist_show_by_id(dbid, dbtype, silent=False, automated=False):
     e_num = None
     details = {}
 
-    xbmc.log(f"nICo Context: [PERSIST] Entry -> ID:{dbid} Type:{dbtype} (Silent:{silent})", xbmc.LOGINFO)
+    xbmc.log(f"nICo Context: [PERSIST] Entry -> ID:{dbid} Type:{dbtype} (Silent:{silent})", info)
     xbmc.log(f"nICo Context: [PERSIST] Starting resolution for {dbtype} ID {dbid}", xbmc.LOGDEBUG)
 
     try:
@@ -54,16 +78,28 @@ def persist_show_by_id(dbid, dbtype, silent=False, automated=False):
 
     xbmc.log(f"nICo Context: [PERSIST] Resolved hierarchy: show={show_id}, season={season_id}, episode={episode_id}", xbmc.LOGDEBUG)
 
-    # Resolve show title robustly (UI labels might be empty in background events)
-    show_title = xbmc.getInfoLabel('ListItem.TVShowTitle') or xbmc.getInfoLabel('ListItem.Label')
-    if (not show_title or show_title == 'Label') and show_id:
+    if not show_id:
+        xbmc.log(f"nICo Context: [PERSIST] Aborted — no show ID for {dbtype} {dbid}", xbmc.LOGWARNING)
+        return
+
+    if create_only and os.path.exists(profile_path(show_id)):
+        xbmc.log(f"nICo Context: [PERSIST] Profile exists for show {show_id}, create_only — nothing written", xbmc.LOGDEBUG)
+        return
+
+    # Resolve show title robustly. Background events: the focused ListItem is unrelated to the
+    # item that played, so always ask the library.
+    if automated:
         show_title = common_actions._fetch_show_title(show_id, fallback=f"ID:{show_id}")
+    else:
+        show_title = xbmc.getInfoLabel('ListItem.TVShowTitle') or xbmc.getInfoLabel('ListItem.Label')
+        if not show_title or show_title == 'Label':
+            show_title = common_actions._fetch_show_title(show_id, fallback=f"ID:{show_id}")
     
     if not show_title:
         show_title = f"{dbtype}:{dbid}"
 
     tag = f"PERSIST:{show_title}"
-    xbmc.log(f"nICo Context: [{tag}] Processing state | dbid='{dbid}' dbtype='{dbtype}'", xbmc.LOGINFO)
+    xbmc.log(f"nICo Context: [{tag}] Processing state | dbid='{dbid}' dbtype='{dbtype}'", info)
 
     # Construct human-readable location
     location = show_title
@@ -94,6 +130,8 @@ def persist_show_by_id(dbid, dbtype, silent=False, automated=False):
     }
     if ep_title:
         status["episode_title"] = ep_title
+    if source:
+        status["source"] = source
 
     if paths:
         status["paths"] = paths
@@ -104,13 +142,14 @@ def persist_show_by_id(dbid, dbtype, silent=False, automated=False):
     if dbtype == 'episode' and episode_id:
         resume_info = details.get('resume', {})
         runtime = details.get('runtime', 0)
-        pos = resume_info.get('position', 0)
-        total = resume_info.get('total') or runtime
-        
+        pos = position if position is not None else resume_info.get('position', 0)
+        total = duration or resume_info.get('total') or runtime
+
         # Determine Strategy
-        strategy = "manual_save"
-        if automated: # Triggered by Service
-            strategy = "in_progress" if pos > 0 else "completed"
+        if not strategy:
+            strategy = "manual_save"
+            if automated: # Triggered by Service
+                strategy = "in_progress" if pos > 0 else "completed"
 
         # If completed, reflect the full progress instead of 0
         if strategy == "completed" and total > 0:
@@ -129,9 +168,9 @@ def persist_show_by_id(dbid, dbtype, silent=False, automated=False):
         }
 
         notification_msg = f" Season {s_num:02} Episode {e_num:02} {common_locks.DOT_SPC} Progress saved ({int(percentage)}%)"
-        xbmc.log(f"nICo Context: [{tag}] Playback {strategy} -> S{s_num:02}E{e_num:02} stopped at {round(pos, 2)}s / {round(total, 2)}s ({percentage}%)", xbmc.LOGINFO)
+        xbmc.log(f"nICo Context: [{tag}] Playback {strategy} -> S{s_num:02}E{e_num:02} stopped at {round(pos, 2)}s / {round(total, 2)}s ({percentage}%)", info)
 
-    cfg_dir = xbmcvfs.translatePath('special://profile/addon_data/nico.video.contextactions/')
+    cfg_dir = xbmcvfs.translatePath(_CFG_DIR)
     try:
         if not xbmcvfs.exists(cfg_dir):
             xbmcvfs.mkdirs(cfg_dir)
@@ -142,7 +181,7 @@ def persist_show_by_id(dbid, dbtype, silent=False, automated=False):
         except Exception:
             pass
 
-    path = os.path.join(cfg_dir, f"{show_id or dbid}.json")
+    path = profile_path(show_id)
 
     # Load existing data to update history and preserve stack
     history = []
@@ -189,12 +228,13 @@ def persist_show_by_id(dbid, dbtype, silent=False, automated=False):
         with open(tmp, 'w', encoding='utf-8') as f:
             json.dump(profile, f, indent=2, ensure_ascii=False)
             f.flush()
-            try:
-                os.fsync(f.fileno())
-            except Exception:
-                pass
+            if durable:
+                try:
+                    os.fsync(f.fileno())
+                except Exception:
+                    pass
         os.replace(tmp, path)
-        xbmc.log(f"nICo Context: [{tag}] Saved profile -> {path}", xbmc.LOGINFO)
+        xbmc.log(f"nICo Context: [{tag}] Saved profile -> {path}", info)
         if not silent:
             common_locks.notification(show_title, notification_msg, xbmcgui.NOTIFICATION_INFO, 2500)
     except Exception as ex:

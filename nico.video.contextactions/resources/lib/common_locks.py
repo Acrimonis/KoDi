@@ -301,6 +301,33 @@ def merge_and_save_snapshot(root_id, fresh_dict, tag=""):
     return canonical
 
 
+def update_snapshot_entries(root_id, entries, tag=""):
+    """Overwrite {idFile: lastPlayed} entries in the shared snapshot, if one exists.
+
+    Called after an intentional lastPlayed write (Move to Top, Watched to Past...) so that a
+    restorer queued behind this action restores the new date, not the pre-queue one.
+    No snapshot on disk: nothing to do — the next action captures the DB, which already
+    holds the new value.
+    """
+    path = _snap_path(root_id)
+    if not entries or not os.path.exists(path):
+        return
+    try:
+        with open(path, 'r') as f:
+            canonical = {int(k): v for k, v in json.load(f).items()}
+        for fid, lp in entries.items():
+            canonical[int(fid)] = lp or ''
+        tmp_path = path + '.tmp'
+        with open(tmp_path, 'w') as f:
+            json.dump({str(k): v for k, v in canonical.items()}, f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)
+        xbmc.log(f"nICo Context: [{tag}] SNAPSHOT updated — root_id={root_id} {len(entries)} idFiles overwritten", xbmc.LOGINFO)
+    except Exception as ex:
+        xbmc.log(f"nICo Context: [{tag}] SNAPSHOT update error (root_id={root_id}): {ex}", xbmc.LOGWARNING)
+
+
 def _delete_snapshot_if_last(root_id, tag=""):
     """Delete the snapshot file if no lock files remain for root_id.
 
@@ -504,7 +531,7 @@ if __name__ == '__main__':
     # Ensure local path is available and modules are imported so the loop can find them
     sys.path.append(os.path.dirname(__file__))
     try:
-        import common_actions, common_db, smart_cmd, watched_past, toggle_watch
+        import common_actions, common_db, smart_cmd, watched_past, toggle_watch, move_to_top, smart_play
     except ImportError:
         pass
 
