@@ -176,7 +176,7 @@ Add the following inside the `<keymap>` tags. This targets the Video Library spe
 
 ### Smart Play on the remote's Play button
 
-Add inside `<Videos>` (same file, or `remote.xml`). Which tag fires depends on how the remote reaches Kodi:
+Add inside `<Videos>` (same file, or `remote.xml`). Which tag fires depends on how the remote reaches Kodi (`<remote>`, `<keyboard>` or `<appcommand>`):
 
 ```xml
 <Videos>
@@ -184,11 +184,18 @@ Add inside `<Videos>` (same file, or `remote.xml`). Which tag fires depends on h
     <remote>
         <play>RunScript(special://home/addons/nico.video.contextactions/resources/lib/smart_play.py)</play>
     </remote>
-    <!-- IR/MCE remotes on Windows usually send the keyboard media key instead -->
+    <!-- Keyboards with media keys -->
     <keyboard>
         <play_pause>RunScript(special://home/addons/nico.video.contextactions/resources/lib/smart_play.py)</play_pause>
     </keyboard>
+    <!-- Windows media remotes / MCE receivers: the button arrives as an app command (Kodi's appcommand.xml maps it to PlayPause globally) -->
+    <appcommand>
+        <play_pause>RunScript(special://home/addons/nico.video.contextactions/resources/lib/smart_play.py)</play_pause>
+        <play>RunScript(special://home/addons/nico.video.contextactions/resources/lib/smart_play.py,Play)</play>
+    </appcommand>
 </Videos>
 ```
+
+A Windows media remote's Play/Pause button is an **app command**, not a `<keyboard>` or `<remote>` key. Without the `<appcommand>` block the button never reaches Smart Play: Kodi's global `PlayPause` runs instead and shows its own "Continue watching / Play from beginning" prompt on a show.
 
 To find out which one your remote sends: enable debug logging (**Settings → System → Logging**), press Play in the library, and look for the `OnKey` line in `kodi.log`. Phone remote apps (Kore, Yatse) call JSON-RPC directly and cannot be intercepted. Keymap changes need a Kodi restart.
