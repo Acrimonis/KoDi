@@ -32,10 +32,6 @@
                 <label>nICo Dev &#x2022; Reload Modules</label>
                 <visible>[String.IsEqual(ListItem.DBType,movie) | String.IsEqual(ListItem.DBType,tvshow) | String.IsEqual(ListItem.DBType,season) | String.IsEqual(ListItem.DBType,episode)]</visible>
             </item>
-            <item library="resources/lib/smart_cmd.py">
-                <label>Persist &#x2022; Save Show Profile</label>
-                <visible>[String.IsEqual(ListItem.DBType,tvshow) | String.IsEqual(ListItem.DBType,season) | String.IsEqual(ListItem.DBType,episode)]</visible>
-            </item>
         </menu>
     </extension>
 
