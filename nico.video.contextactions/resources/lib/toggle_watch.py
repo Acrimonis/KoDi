@@ -2,9 +2,11 @@ import xbmc, xbmcgui
 import common_locks
 import common_actions
 import common_db
+import nav_focus
+import smart_cmd
 
 
-def _nudge_and_sql_toggle(episodes, target_playcount, saved_lastplayed, tag=""):
+def _nudge_and_sql_toggle(episodes, target_playcount, tag=""):
     """Toggle watched state: 1 SetEpisodeDetails per season (fires UI event),
     SQL batch for remaining episodes (fast, no UI events), then SQL restore lastPlayed.
 
@@ -18,6 +20,8 @@ def _nudge_and_sql_toggle(episodes, target_playcount, saved_lastplayed, tag=""):
     t = common_actions._ms()
 
     ep_to_idfile = common_actions._episodes_to_idfile(episodes, tag=tag)
+    if not ep_to_idfile:
+        raise RuntimeError("could not resolve idFiles for the selected episodes")
 
     # Pick 1 nudge episode per season (first encountered)
     seen_seasons = set()
@@ -39,15 +43,20 @@ def _nudge_and_sql_toggle(episodes, target_playcount, saved_lastplayed, tag=""):
     # Step 2: SQL batch for remaining episodes — UNWATCHED must be NULL (not 0) so
     # COUNT(files.playCount) in season_view correctly excludes them from watched counts.
     sql_pc = target_playcount if target_playcount > 0 else None
-    sql_idfiles = [f for f in saved_lastplayed if f not in nudge_idfiles]
+    # Scope = the idFiles of `episodes` only (the shared snapshot may hold other episodes of the show)
+    sql_idfiles = [f for f in set(ep_to_idfile.values()) if f not in nudge_idfiles]
+    # Marked watched = done: drop the resume bookmark (type 1) like Kodi's own "mark as watched" does
+    clear_idfiles = list(set(ep_to_idfile.values())) if target_playcount > 0 else []
     sql_count = 0
-    if sql_idfiles:
+    if sql_idfiles or clear_idfiles:
         try:
             with common_db.kodi_db_context() as conn:
                 for file_id in sql_idfiles:
                     conn.execute("UPDATE files SET playCount = ? WHERE idFile = ?",
                                  [sql_pc, file_id])
                     sql_count += 1
+                for file_id in clear_idfiles:
+                    conn.execute("DELETE FROM bookmark WHERE idFile = ? AND type = 1", [file_id])
         except Exception as e:
             xbmc.log(f"nICo Context: [{tag}] SQL toggle EXCEPTION: {e}", xbmc.LOGERROR)
 
@@ -58,29 +67,27 @@ def _nudge_and_sql_toggle(episodes, target_playcount, saved_lastplayed, tag=""):
     )
 
 
-def _navigate_list(target_idx, tag="TOGGLE"):
-    """Navigate the active container to 0-based target_idx using Action(Down/Up)."""
-    current = int(xbmc.getInfoLabel('Container.CurrentItem') or 1)
-    target = target_idx + 1  # Container.CurrentItem is 1-based
-    delta = target - current
-    xbmc.log(f"nICo Context: [{tag}] Navigate: current={current} target={target} delta={delta}", xbmc.LOGINFO)
-    action = 'Action(Down)' if delta > 0 else 'Action(Up)'
-    for _ in range(abs(delta)):
-        xbmc.executebuiltin(action)
-        xbmc.sleep(30)
-    # Verify and retry if Kodi's UI didn't keep up
-    for retry in range(3):
-        xbmc.sleep(50)
-        actual = int(xbmc.getInfoLabel('Container.CurrentItem') or 1)
-        if actual == target:
-            break
-        remaining = target - actual
-        correction = 'Action(Down)' if remaining > 0 else 'Action(Up)'
-        xbmc.log(f"nICo Context: [{tag}] Navigate correction retry={retry+1}: actual={actual} target={target} remaining={remaining}", xbmc.LOGINFO)
-        for _ in range(abs(remaining)):
-            xbmc.executebuiltin(correction)
-            xbmc.sleep(50)
-    xbmc.log(f"nICo Context: [{tag}] Navigate done: Container.CurrentItem={xbmc.getInfoLabel('Container.CurrentItem')}", xbmc.LOGINFO)
+def _follow_profile(show_id, episode_ids, watched, tag):
+    """Let the show profile (Smart Play / navigation) follow the new watched state. Never fails the toggle."""
+    if not show_id:
+        return
+    try:
+        smart_cmd.follow_watched_state(show_id, episode_ids, watched, tag=tag)
+    except Exception as e:
+        xbmc.log(f"nICo Context: [{tag}] Profile update failed: {e}", xbmc.LOGWARNING)
+
+
+def _update_restart_marks(episode_ids, resume_ids, watched, tag):
+    """Marked unwatched while Kodi still holds a resume point -> remember it, so the next start asks
+    (default Restart). Marked watched -> forget. Never fails the toggle."""
+    try:
+        if watched:
+            smart_cmd.clear_restart(episode_ids)
+        elif resume_ids:
+            smart_cmd.mark_restart(resume_ids)
+            xbmc.log(f"nICo Context: [{tag}] {len(resume_ids)} episode(s) marked unwatched with a resume point — next start asks", xbmc.LOGINFO)
+    except Exception as e:
+        xbmc.log(f"nICo Context: [{tag}] Restart marks update failed: {e}", xbmc.LOGWARNING)
 
 
 def toggle_watch_state():
@@ -99,7 +106,7 @@ def toggle_watch_state():
     xbmc.log(f"nICo Context: [{tag}] Starting for {dbtype} (ID: {dbid}) root_id={root_id}", xbmc.LOGINFO)
     try:
         if dbtype in ['tvshow', 'season']:
-            episodes = common_actions.get_episodes(dbid, dbtype, extra_props=["playcount", "lastplayed"])
+            episodes = common_actions.get_episodes(dbid, dbtype, extra_props=["playcount", "lastplayed", "resume"])
             if not episodes:
                 xbmc.log(f"nICo Context: [{tag}] FAILED — no episodes resolved for {dbtype} {dbid}", xbmc.LOGERROR)
                 return
@@ -118,8 +125,12 @@ def toggle_watch_state():
             # 1 SetEpisodeDetails per season (fired BEFORE SQL so Kodi detects the change
             # and fires item-level events → badges update). Rest written via fast SQL batch.
             t0 = common_actions._ms()
-            _nudge_and_sql_toggle(episodes, target_playcount, saved_lastplayed, tag=tag)
+            _nudge_and_sql_toggle(episodes, target_playcount, tag=tag)
             common_actions._restore_lastplayed(saved_lastplayed, tag=tag)
+            _follow_profile(root_id, [ep['episodeid'] for ep in episodes], bool(target_playcount), tag)
+            _update_restart_marks([ep['episodeid'] for ep in episodes],
+                                  [ep['episodeid'] for ep in episodes if (ep.get('resume') or {}).get('position', 0) > 0],
+                                  bool(target_playcount), tag)
             xbmc.executebuiltin('Container.Refresh')
             num_seasons = len(set(ep.get('season', 0) for ep in episodes))
             body = f"Changed to {state_label}: {common_actions._plural(num_seasons, 'season')}, {common_actions._plural(len(episodes), 'episode')}"
@@ -132,7 +143,7 @@ def toggle_watch_state():
             rpc_types = {'movie': 'Movie', 'episode': 'Episode'}
             type_name = rpc_types.get(dbtype)
             if type_name:
-                item_data = common_actions.execute_rpc(f"VideoLibrary.Get{type_name}Details", {f"{dbtype}id": int(dbid), "properties": ["playcount", "tvshowid", "season"]})
+                item_data = common_actions.execute_rpc(f"VideoLibrary.Get{type_name}Details", {f"{dbtype}id": int(dbid), "properties": ["playcount", "tvshowid", "season", "resume"]})
                 xbmc.log(f"nICo Context: [{tag}] Get{type_name}Details result: {item_data}", xbmc.LOGINFO)
                 details = item_data.get('result', {}).get(f'{dbtype}details', {})
                 current_pc = details.get('playcount', 0)
@@ -154,19 +165,25 @@ def toggle_watch_state():
                         season_tipped = all(bool(e.get('playcount', 0)) == bool(current_pc) for e in season_eps)
                         xbmc.log(f"nICo Context: [{tag}] season_tipped={season_tipped} ({len(season_eps)} eps all {'watched' if current_pc else 'unwatched'})", xbmc.LOGINFO)
 
-                set_res = common_actions.execute_rpc(f"VideoLibrary.Set{type_name}Details", {f"{dbtype}id": int(dbid), "playcount": new_val})
+                set_params = {f"{dbtype}id": int(dbid), "playcount": new_val}
+                if new_val == 1:
+                    set_params["resume"] = {"position": 0, "total": 0}  # watched = done: clear the resume point
+                set_res = common_actions.execute_rpc(f"VideoLibrary.Set{type_name}Details", set_params)
                 xbmc.log(f"nICo Context: [{tag}] Set{type_name}Details result: {set_res}", xbmc.LOGINFO)
                 if dbtype == 'episode':
+                    _follow_profile(details.get('tvshowid'), [int(dbid)], bool(new_val), tag)
+                    _update_restart_marks([int(dbid)], [int(dbid)] if (details.get('resume') or {}).get('position', 0) > 0 else [],
+                                          bool(new_val), tag)
                     if season_tipped:
                         body = f"Changed to {state_label}: {common_actions._plural(1, 'season')}, {common_actions._plural(1, 'episode')}."
                     else:
                         body = f"Changed to {state_label}: {common_actions._plural(1, 'episode')}."
                     if season_eps and new_val == 1:
                         post_toggle = {e['episodeid']: (new_val if e['episodeid'] == int(dbid) else e.get('playcount', 0)) for e in season_eps}
-                        first_unwatched_idx = next((i for i, e in enumerate(season_eps) if post_toggle[e['episodeid']] == 0), None)
-                        if first_unwatched_idx is not None:
+                        first_unwatched = next((e for e in season_eps if post_toggle[e['episodeid']] == 0), None)
+                        if first_unwatched is not None:
                             xbmc.sleep(100)
-                            _navigate_list(first_unwatched_idx, tag=tag)
+                            nav_focus.focus_episode(first_unwatched['episodeid'], tag=tag)
                 else:
                     body = f"Changed to {state_label}."
                 xbmc.log(f"nICo Context: [{tag}] Complete", xbmc.LOGINFO)

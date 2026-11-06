@@ -25,11 +25,13 @@ def _episodes_to_idfile(episodes, tag=""):
 
 
 def _resolve_root_id(dbid, dbtype):
-    """Return the tvshowid int that owns this item — used as the mutex key.
-    For tvshow: dbid itself. For season/episode: one RPC to get tvshowid.
-    For movie/other: use dbid directly (movies have no shared parent)."""
+    """Return the mutex key (lock + snapshot file name) of the item.
+    For tvshow: the tvshowid int. For season/episode: the owning tvshowid (one RPC).
+    For movie: 'm<dbid>', so a movie never shares a lock/snapshot with a show of the same ID."""
     try:
         dbid_int = int(dbid)
+        if dbtype == 'movie':
+            return f"m{dbid_int}"
         if dbtype == 'tvshow':
             return dbid_int
         if dbtype == 'season':

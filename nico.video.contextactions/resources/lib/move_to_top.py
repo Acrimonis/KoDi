@@ -1,6 +1,7 @@
 import xbmc, xbmcgui, time
 import common_locks
 import common_actions
+import smart_cmd
 
 _COUNTDOWN_SECONDS = 5
 
@@ -20,9 +21,9 @@ def _pick_target(dbid, dbtype):
     Order: season then episode, specials (season 0) last."""
     if dbtype == 'episode':
         res = common_actions.execute_rpc("VideoLibrary.GetEpisodeDetails", {
-            "episodeid": int(dbid), "properties": ["season", "episode"]})
+            "episodeid": int(dbid), "properties": ["season", "episode", "playcount", "resume"]})
         return res.get('result', {}).get('episodedetails')
-    episodes = common_actions.get_episodes(dbid, dbtype, extra_props=["playcount", "episode"])
+    episodes = common_actions.get_episodes(dbid, dbtype, extra_props=["playcount", "episode", "resume"])
     if not episodes:
         return None
     episodes.sort(key=lambda e: (e.get('season', 0) == 0, e.get('season', 0), e.get('episode', 0)))
@@ -73,6 +74,16 @@ def move_to_top():
             fid = common_actions._episodes_to_idfile([target], tag=tag).get(target['episodeid'])
             if fid:
                 common_locks.update_snapshot_entries(root_id, {fid: now_str}, tag=tag)
+            # Smart Play and library navigation read the show profile: point it at the new top episode
+            try:
+                position = (target.get('resume') or {}).get('position', 0)
+                # Same rule as a profile derived from the library: resume point or unwatched -> continue it
+                strategy = 'in_progress' if position > 0 or not target.get('playcount') else 'completed'
+                smart_cmd.persist_show_by_id(target['episodeid'], 'episode', silent=True, automated=True,
+                                             position=position if strategy == 'in_progress' else None,
+                                             strategy=strategy)
+            except Exception as e:
+                xbmc.log(f"nICo Context: [{tag}] Profile update failed: {e}", xbmc.LOGWARNING)
 
         xbmc.log(f"nICo Context: [{tag}] Complete | lastPlayed={now_str} target={label or dbtype}", xbmc.LOGINFO)
         xbmc.executebuiltin('Container.Refresh')

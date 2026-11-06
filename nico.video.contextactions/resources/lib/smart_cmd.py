@@ -19,7 +19,8 @@ def profile_path(show_id):
 def min_resume_seconds():
     """Kodi stores no resume point before this many seconds (advancedsettings.xml, default 180)."""
     try:
-        root = ET.parse(xbmcvfs.translatePath('special://profile/advancedsettings.xml')).getroot()
+        # advancedsettings.xml is only read from the master profile directory
+        root = ET.parse(xbmcvfs.translatePath('special://masterprofile/advancedsettings.xml')).getroot()
         return int(root.findtext('video/ignoresecondsatstart'))
     except Exception:
         return _DEFAULT_MIN_RESUME
@@ -352,6 +353,112 @@ def persist_show_by_id(dbid, dbtype, silent=False, automated=False, create_only=
     except Exception as ex:
         xbmc.log(f"nICo Context: [{tag}] Failed to save profile: {ex}", xbmc.LOGERROR)
         common_locks.notification(show_title, "Failed to save show profile.", xbmcgui.NOTIFICATION_ERROR, 3500)
+
+
+def clock(seconds):
+    """m:ss, or h:mm:ss from one hour."""
+    s = int(seconds)
+    h, m, s = s // 3600, s % 3600 // 60, s % 60
+    return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
+
+
+def ask_resume(position, show_title, season, episode, total=None, default_restart=False):
+    """Kodi-style resume menu. Returns True to resume at `position`, False to start from the beginning.
+
+    Same shape as Kodi's own resume prompt: no heading, the first entry is the default and a cancelled
+    menu picks it ("Resume from mm:ss" with Kodi's localized string 12022 / "Restart"). The episode info
+    is shown as a toast while the menu is open. default_restart puts "Restart" first, for an episode the
+    user marked unwatched (its old resume point is probably not wanted).
+    """
+    at = clock(position)
+    resume_label = xbmc.getLocalizedString(12022)
+    resume_label = resume_label.replace('%s', at) if '%s' in resume_label else f"{resume_label or 'Resume from'} {at}"
+    begin_label = "Restart"
+    percent = f" ({position / total * 100:.0f}%)" if total else ""
+    common_locks.notification(show_title, f"S{int(season or 0):02d}E{int(episode or 0):02d}{common_locks.DOT_SPC}"
+                              f"left at {at}{percent}", xbmcgui.NOTIFICATION_INFO, 6000)
+    labels = [begin_label, resume_label] if default_restart else [resume_label, begin_label]
+    choice = xbmcgui.Dialog().contextmenu(labels)
+    if choice < 0:
+        return not default_restart  # cancelled = the default (first) entry
+    return (choice == 1) if default_restart else (choice == 0)
+
+
+# --- Episodes marked unwatched while Kodi still holds a resume point for them -------------------
+# Watched Toggle leaves Kodi's resume point in place, so such an episode looks half-watched again.
+# The mark makes the next start (Smart Play / autoplay) ask instead of silently resuming.
+
+def _marks_path():
+    return os.path.join(xbmcvfs.translatePath(_CFG_DIR), 'restart_marks.json')
+
+
+def _load_marks():
+    try:
+        with open(_marks_path(), 'r', encoding='utf-8') as f:
+            return {int(i) for i in json.load(f).get('episode_ids', [])}
+    except Exception:
+        return set()
+
+
+def _save_marks(ids):
+    try:
+        if not xbmcvfs.exists(xbmcvfs.translatePath(_CFG_DIR)):
+            xbmcvfs.mkdirs(xbmcvfs.translatePath(_CFG_DIR))
+        tmp = _marks_path() + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump({"episode_ids": sorted(ids)}, f)
+        os.replace(tmp, _marks_path())
+    except Exception as ex:
+        xbmc.log(f"nICo Context: [MARKS] Could not save restart marks: {ex}", xbmc.LOGWARNING)
+
+
+def mark_restart(episode_ids):
+    """Remember that these episodes were marked unwatched and still have a resume point."""
+    marks = _load_marks()
+    new = marks | {int(i) for i in episode_ids}
+    if new != marks:
+        _save_marks(new)
+
+
+def clear_restart(episode_ids):
+    marks = _load_marks()
+    new = marks - {int(i) for i in episode_ids}
+    if new != marks:
+        _save_marks(new)
+
+
+def take_restart_mark(episode_id):
+    """True (once) if the episode carries the mark; the mark is consumed."""
+    marks = _load_marks()
+    if int(episode_id) not in marks:
+        return False
+    _save_marks(marks - {int(episode_id)})
+    return True
+
+
+def follow_watched_state(show_id, episode_ids, watched, tag=""):
+    """Keep the profile consistent after Watched Toggle changed the state of `episode_ids`.
+
+    Acts only when the profile's current episode is among them (otherwise the toggle does not
+    concern the user's place in the show):
+      marked watched   -> profile becomes `completed` (Smart Play then plays the next unwatched episode)
+      marked unwatched -> a `completed` profile becomes `in_progress` at 0 (Smart Play replays it);
+                          an in-progress profile is left alone (Kodi keeps its resume point).
+    """
+    profile = load_profile(show_id)
+    resume = ((profile or {}).get('status') or {}).get('resume') or {}
+    episode_id = resume.get('episode_id')
+    if not episode_id or int(episode_id) not in {int(e) for e in episode_ids}:
+        return
+    strategy = resume.get('strategy')
+    if watched and strategy != 'completed':
+        persist_show_by_id(episode_id, 'episode', silent=True, automated=True, strategy='completed')
+    elif not watched and strategy == 'completed':
+        persist_show_by_id(episode_id, 'episode', silent=True, automated=True, strategy='in_progress', position=0.0)
+    else:
+        return
+    xbmc.log(f"nICo Context: [{tag}] Profile follows toggle: episode {episode_id} "
+             f"{'completed' if watched else 'in_progress at 0'}", xbmc.LOGINFO)
 
 
 if __name__ == '__main__':

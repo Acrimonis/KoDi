@@ -433,9 +433,13 @@ def acquire(root_id, tag="", show_name="", on_queue=None, poll_ms=100):
     )
 
     last_notif_ms = 0  # throttle notifications to once per ~3s
+    monitor = xbmc.Monitor()
 
-    # Monotonic timestamp for FIFO ordering (written inside the lock file, not relying on mtime).
-    my_queue_ts = None
+    # Announce ourselves BEFORE looking for competitors: two actions starting together then see each
+    # other's 'queued' file, and the (timestamp, thread id) order picks exactly one winner.
+    # The file also keeps _delete_snapshot_if_last from removing the snapshot while we wait.
+    my_queue_ts = time.time()
+    _write_lock_status(my_lock, 'queued', queue_ts=my_queue_ts)
 
     while True:
         competing = []
@@ -458,13 +462,14 @@ def acquire(root_id, tag="", show_name="", on_queue=None, poll_ms=100):
                     continue
                 # Read status to apply FIFO ordering among queued threads.
                 # A 'held' lock always blocks.  A 'queued' lock only blocks if it
-                # was written BEFORE ours (it has higher queue priority than us).
+                # was written BEFORE ours (it has higher queue priority than us);
+                # equal timestamps are ordered by thread id.
                 status, their_queue_ts = _read_lock(os.path.join(d, fname))
-                if status in ('held', 'inet'):
-                    competing.append(fname)
-                elif status == 'queued':
-                    if my_queue_ts is None or (their_queue_ts is not None and their_queue_ts < my_queue_ts):
+                if status == 'queued':
+                    if their_queue_ts is None or (their_queue_ts, tid) < (my_queue_ts, my_tid):
                         competing.append(fname)  # they queued before us → they have priority
+                else:
+                    competing.append(fname)  # 'held', 'inet', or a file still being written
         except Exception as ex:
             xbmc.log(f"nICo Context: [{tag}] Lock dir scan error: {ex}", xbmc.LOGWARNING)
 
@@ -480,12 +485,6 @@ def acquire(root_id, tag="", show_name="", on_queue=None, poll_ms=100):
             return my_lock, was_queued
 
         if not was_queued:
-            # Write our lock file immediately so _delete_snapshot_if_last sees us as
-            # active — if we only wrote it on win, a releasing thread would see an empty
-            # dir and delete the snapshot while we're still waiting for it.
-            # Mark as queued so the notification helper can distinguish running vs waiting.
-            my_queue_ts = time.monotonic()
-            _write_lock_status(my_lock, 'queued', queue_ts=my_queue_ts)
             blocked_tids = [_parse_lock_fname(f)[1] for f in competing if _parse_lock_fname(f)]
             xbmc.log(
                 f"nICo Context: [{tag}] LOCK QUEUED — show_key={root_id}{name_part} "
@@ -505,7 +504,15 @@ def acquire(root_id, tag="", show_name="", on_queue=None, poll_ms=100):
         # Jitter prevents multiple queued threads from waking up simultaneously
         # and all passing the "no competing locks" check in the same poll cycle.
         jitter = random.randint(0, poll_ms)
-        xbmc.sleep(poll_ms + jitter)
+        if monitor.waitForAbort((poll_ms + jitter) / 1000.0):
+            # Kodi is shutting down: leave the queue instead of waiting forever
+            try:
+                os.remove(my_lock)
+            except OSError:
+                pass
+            _delete_snapshot_if_last(root_id, tag=tag)
+            xbmc.log(f"nICo Context: [{tag}] LOCK WAIT aborted — Kodi shutting down (show_key={root_id})", xbmc.LOGWARNING)
+            raise SystemExit(0)
 
 
 def release(lock_path, root_id, tag="", show_name=""):

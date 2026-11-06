@@ -24,4 +24,39 @@ if errorlevel 8 (
 )
 
 echo Deployed to %DST%
+
+rem ---- Build the addon archive (<id>-<version>.zip) and copy it to QPC ----
+set "ZIPDST=P:\.kodi_d\X__WorkinG__X"
+set "ADDON_ID=nico.video.contextactions"
+set "VERSION="
+for /f "usebackq delims=" %%V in (`powershell -NoProfile -Command "([xml](Get-Content -Raw '%SRC%\addon.xml')).addon.version"`) do set "VERSION=%%V"
+if not defined VERSION (
+    echo Could not read version from addon.xml
+    exit /b 1
+)
+if not exist "%ZIPDST%" (
+    echo Archive folder not found: %ZIPDST%
+    exit /b 1
+)
+
+set "ZIP=%~dp0%ADDON_ID%-%VERSION%.zip"
+if exist "%ZIP%" del "%ZIP%"
+rem System32 tar = bsdtar (a Git/MSYS tar earlier in PATH would misread D: as a host); it writes forward-slash paths, which Kodi requires; top-level folder = addon id
+"%SystemRoot%\System32\tar.exe" -a -c -f "%ZIP%" -C "%~dp0." ^
+    --exclude=.git --exclude=.github --exclude=__pycache__ ^
+    --exclude=AGENTS.md --exclude=Tracking.md ^
+    --exclude=*.zip --exclude=*.bat --exclude=*.code-workspace ^
+    %ADDON_ID%
+if errorlevel 1 (
+    echo Archive build FAILED
+    exit /b 1
+)
+
+copy /y "%ZIP%" "%ZIPDST%\" >nul
+if errorlevel 1 (
+    echo Archive copy FAILED
+    exit /b 1
+)
+
+echo Archive %ADDON_ID%-%VERSION%.zip built and copied to %ZIPDST%
 exit /b 0

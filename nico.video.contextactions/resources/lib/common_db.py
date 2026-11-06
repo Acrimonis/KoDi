@@ -1,4 +1,4 @@
-import os, sqlite3, xbmc, xbmcvfs, typing
+import os, re, sqlite3, xbmc, xbmcvfs, typing
 from contextlib import contextmanager
 from typing import Generator, Optional
 
@@ -12,11 +12,16 @@ def _kodi_db_path() -> str:
         return _CACHED_DB_KODI_PATH
 
     db_dir = xbmcvfs.translatePath('special://database/')
-    db_files = sorted([f for f in os.listdir(db_dir) if f.startswith('MyVideos') and f.endswith('.db')], reverse=True)
-    if not db_files:
+    # Highest schema version wins, compared as a number (MyVideos99.db < MyVideos131.db)
+    versions = {}
+    for f in os.listdir(db_dir):
+        m = re.fullmatch(r'MyVideos(\d+)\.db', f)
+        if m:
+            versions[int(m.group(1))] = f
+    if not versions:
         raise FileNotFoundError("nICo Context: Could not find any MyVideos database files in special://database/")
 
-    _CACHED_DB_KODI_PATH = os.path.join(db_dir, db_files[0])
+    _CACHED_DB_KODI_PATH = os.path.join(db_dir, versions[max(versions)])
     return _CACHED_DB_KODI_PATH
 
 

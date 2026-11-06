@@ -99,7 +99,16 @@ def shift_watched_to_past():
         if not was_queued:
             common_locks.notification(show_title, "Shifting watch date...", xbmcgui.NOTIFICATION_INFO, 3000)
 
-        saved_lastplayed = common_actions._get_canonical_snapshot([ep['episodeid'] for ep in episodes], root_id, tag=tag)
+        snapshot = common_actions._get_canonical_snapshot([ep['episodeid'] for ep in episodes], root_id, tag=tag)
+
+        # Scope = the idFiles of `episodes` only (the shared snapshot may hold other episodes of the show)
+        ep_to_idfile = common_actions._episodes_to_idfile(episodes, tag=tag)
+        if not ep_to_idfile:
+            xbmc.log(f"nICo Context: [{tag}] FAILED — could not resolve idFiles for the selected episodes", xbmc.LOGERROR)
+            common_locks.notification(show_title, "Failed to read the library", xbmcgui.NOTIFICATION_ERROR, 2500)
+            return
+        scope = set(ep_to_idfile.values())
+        saved_lastplayed = {fid: lp for fid, lp in snapshot.items() if fid in scope}
 
         dated = [lp for lp in saved_lastplayed.values() if lp and str(lp) not in ('None', '')]
         if not dated:
@@ -123,9 +132,6 @@ def shift_watched_to_past():
                 return
 
         xbmc.log(f"nICo Context: [{tag}] {len(affected)}/{len(saved_lastplayed)} episodes to update \u2192 {target_str}", xbmc.LOGINFO)
-
-        # Build episodeid → idFile map for nudge selection
-        ep_to_idfile = common_actions._episodes_to_idfile(episodes, tag=tag)
 
         # Pick 1 nudge ep per affected season
         seen_seasons = set()

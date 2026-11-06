@@ -62,8 +62,13 @@ def _refresh_internet():
         if dbtype in ('tvshow', 'season'):
             episodes = common_actions.get_episodes(dbid, dbtype)
             ep_count = len(episodes)
-            expected = 1 + ep_count
-            xbmc.log(f"nICo Context: [{tag}] Expecting {expected} OnUpdate events (1 show + {ep_count} episodes)", xbmc.LOGINFO)
+            if dbtype == 'season':
+                # Only the per-episode RefreshEpisode calls run (no show-level refresh): 1 event per episode
+                expected = max(1, ep_count)
+                xbmc.log(f"nICo Context: [{tag}] Expecting {expected} OnUpdate events ({ep_count} episodes)", xbmc.LOGINFO)
+            else:
+                expected = 1 + ep_count
+                xbmc.log(f"nICo Context: [{tag}] Expecting {expected} OnUpdate events (1 show + {ep_count} episodes)", xbmc.LOGINFO)
             if episodes:
                 ep_to_idfile = common_actions._episodes_to_idfile(episodes, tag=tag)
                 saved_lp = common_actions._get_canonical_snapshot([ep['episodeid'] for ep in episodes], root_id, tag=tag)

@@ -23,12 +23,14 @@ _COMPLETED_RATIO = 0.92  # position >= 92% of duration counts as completed (Kodi
 class nICoPlayer(xbmc.Player):
     def __init__(self):
         super().__init__()
-        self._ended_id = None   # episode that last ended, and when (survives _reset)
+        self._ended_id = None   # episode (and its show) that last ended, and when (survives _reset)
+        self._ended_show = None
         self._ended_at = 0
         self._reset()
 
     def _reset(self):
         self._active_id = None
+        self._active_show = None
         self._position = None       # last sampled player position (s), in memory only
         self._duration = None
         self._written_position = None
@@ -38,26 +40,37 @@ class nICoPlayer(xbmc.Player):
         # Previous episode got no Stopped/Ended (playlist advance, Player.Open over it): save it now
         if self._active_id:
             self._persist("Switched", 'in_progress', silent=True)
-        # Allow metadata to populate
-        xbmc.sleep(500)
-        self._reset()
+        self._reset()  # stops tick() from sampling the new item as the previous episode
+
+    def onAVStarted(self):
+        # Audio/video is running: the item's metadata (db id, media type) is populated
         tag = self.getVideoInfoTag()
         dbid, media_type = tag.getDbId(), tag.getMediaType()
         # Profiles are per show: only library episodes are tracked
-        if media_type != 'episode' or not dbid or dbid == -1:
+        if media_type != 'episode' or not dbid or dbid == -1 or dbid == self._active_id:
             return
         self._active_id = dbid
         self._next_write = time.time() + _TICK_SECONDS
         xbmc.log(f"nICo Service: Tracking playback for episode (ID: {dbid})", xbmc.LOGINFO)
-        autoplay = self._ended_id not in (None, dbid) and time.time() - self._ended_at < _AUTOPLAY_WINDOW
+        try:
+            res = common_actions.execute_rpc("VideoLibrary.GetEpisodeDetails", {"episodeid": int(dbid), "properties": ["tvshowid"]})
+            self._active_show = res.get('result', {}).get('episodedetails', {}).get('tvshowid')
+        except Exception:
+            self._active_show = None
+        # Autoplay = another episode of the SAME show starting right after one ended
+        autoplay = (self._ended_id not in (None, dbid) and time.time() - self._ended_at < _AUTOPLAY_WINDOW
+                    and self._active_show is not None and self._active_show == self._ended_show)
         try:
             # Show has no profile yet: create it now (silent, library resume point) so a crash still leaves one
             smart_cmd.persist_show_by_id(dbid, 'episode', silent=True, automated=True,
                                          create_only=True, strategy='in_progress')
         except Exception as e:
             xbmc.log(f"nICo Service: Start persist failed: {e}", xbmc.LOGERROR)
+        # The mark is one-shot: any start of the episode consumes it. Only autoplay is asked here: a manual
+        # start goes through Kodi's own resume prompt, Smart Play asks by itself before opening the episode.
+        marked = smart_cmd.take_restart_mark(dbid)
         if autoplay:
-            threading.Thread(target=self._offer_resume, args=(dbid,), daemon=True).start()
+            threading.Thread(target=self._offer_resume, args=(dbid, marked), daemon=True).start()
 
     def onPlayBackStopped(self):
         if self._active_id:
@@ -66,7 +79,7 @@ class nICoPlayer(xbmc.Player):
 
     def onPlayBackEnded(self):
         if self._active_id:
-            self._ended_id, self._ended_at = self._active_id, time.time()
+            self._ended_id, self._ended_show, self._ended_at = self._active_id, self._active_show, time.time()
             self._persist("Ended", 'completed', silent=False)
         self._reset()
 
@@ -114,8 +127,11 @@ class nICoPlayer(xbmc.Player):
             saved = 0  # Kodi's resume point was cleared (reset): nothing to offer
         return saved, ep
 
-    def _offer_resume(self, episode_id):
-        """Autoplay moved on to an episode that was left part-way: ask whether to resume there."""
+    def _offer_resume(self, episode_id, marked=False):
+        """Autoplay moved on to an episode that was left part-way: ask whether to resume there.
+
+        marked: the user marked the episode unwatched; its old resume point may be unwanted, so
+        "Restart" is the default entry."""
         try:
             position, ep = self._saved_position(episode_id)
             if position < _OFFER_MIN_POSITION:
@@ -126,24 +142,16 @@ class nICoPlayer(xbmc.Player):
                 return
             if not xbmc.getCondVisibility('Player.Paused'):
                 self.pause()
-            h, m, sec = int(position) // 3600, int(position) % 3600 // 60, int(position) % 60
-            clock = f"{h}:{m:02d}:{sec:02d}" if h else f"{m}:{sec:02d}"
             title = common_actions._fetch_show_title(ep.get('tvshowid'), fallback="Resume?")
-            xbmc.log(f"nICo Service: Autoplay reached episode {episode_id} with saved position {position:.1f}s — asking", xbmc.LOGINFO)
-            # Same shape as Kodi's own resume prompt; the first entry uses Kodi's string (follows the UI language)
-            resume_label = xbmc.getLocalizedString(12022)
-            resume_label = resume_label.replace('%s', clock) if '%s' in resume_label else f"{resume_label or 'Resume from'} {clock}"
-            begin_label = "Restart"
+            xbmc.log(f"nICo Service: Autoplay reached episode {episode_id} with saved position {position:.1f}s — asking"
+                     f"{' (marked unwatched: default restart)' if marked else ''}", xbmc.LOGINFO)
             try:
-                percent = f" ({position / self.getTotalTime() * 100:.0f}%)"
+                total = self.getTotalTime()
             except Exception:
-                percent = ""
-            # The context menu has no heading: show the episode info as a toast while it is open
-            common_locks.notification(title, f"S{ep.get('season', 0):02d}E{ep.get('episode', 0):02d}{common_locks.DOT_SPC}"
-                                      f"left at {clock}{percent}", xbmcgui.NOTIFICATION_INFO, 6000)
-            choice = xbmcgui.Dialog().contextmenu([resume_label, begin_label])
-            resume = choice != 1  # default (first entry) and a cancelled menu both resume
-            xbmc.log(f"nICo Service: Autoplay prompt answer: {'resume' if resume else 'beginning'} (choice={choice})", xbmc.LOGINFO)
+                total = None
+            resume = smart_cmd.ask_resume(position, title, ep.get('season', 0), ep.get('episode', 0),
+                                          total=total, default_restart=marked)
+            xbmc.log(f"nICo Service: Autoplay prompt answer: {'resume' if resume else 'beginning'}", xbmc.LOGINFO)
             if self._playing_episode(episode_id):
                 if resume:
                     self.seekTime(position)

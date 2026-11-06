@@ -37,10 +37,6 @@
 
     <extension point="xbmc.service" library="resources/lib/service.py"/>
 
-    <extension point="xbmc.python.script" library="resources/lib/common_actions.py">
-        <provides>executable</provides>
-    </extension>
-
     <extension point="xbmc.addon.metadata">
         <summary lang="en">Silent Library tools for power users.</summary>
         <description lang="en">Advanced context menu actions for Kodi.</description>

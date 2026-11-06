@@ -158,6 +158,45 @@ Reads `{showid}.json` when a show or season is active and plays accordingly:
 
 - Interplay: Move to Top sets `lastPlayed` to now on its target, so a derived profile on that show points at that episode. Watched to Past... can leave several episodes with the same `lastPlayed`, so ties need a deterministic order (season, then episode).
 
+## Code review follow-up (2026-11-05)
+
+Full static review of the 1.0.9 code; the user elected the changes, Claude implemented and self-reviewed them (no diff round, max 3 iterations). **All changes below are syntax-checked only, uncommitted (after `91e9b01`), not deployed to QPC, not yet tested in Kodi.** No version bump yet (still 1.0.9 in `addon.xml`/README; 1.0.10 and a zip are undecided).
+
+| # | Change | Files | State |
+|---|--------|-------|-------|
+| 1 | Watched Toggle / Watched to Past... write only the selected episodes' idFiles, not every key of the shared snapshot (queued behind another action they used to touch the whole show) | `toggle_watch.py`, `watched_past.py` | done — untested |
+| 2 | Refresh (Internet) on a season expects N `OnUpdate` events (was 1 + N → always timed out; inferred from code, no season run in the logs) | `refresh_internet.py` | done — untested |
+| 3 | DB pick = highest `MyVideos<n>.db` by number | `common_db.py` | done (both instances have only 131) |
+| 4 | Focus after toggling an episode: `nav_focus.focus_episode(id)` by DBID instead of Up/Down stepping (`_navigate_list` removed) | `toggle_watch.py`, `nav_focus.py` | done — untested (check `..` row, other sort, filtered list) |
+| 5 | Navigation `completed` in an "All seasons" episode list searches the whole show (season scope only if the list holds one season) | `nav_focus.py` | done — untested |
+| 6 | Lock wait ends on Kodi shutdown (`waitForAbort`, lock removed, `SystemExit`) | `common_locks.py` | done — untested |
+| 7 | Lock race: write `queued` file (timestamp) before scanning; order = (timestamp, tid); unreadable/empty files block | `common_locks.py` | done — untested (two actions started together) |
+| 9 | Autoplay prompt only if the new episode belongs to the same show as the one that just ended | `service.py` | done — needs restart |
+| 11 | Movie lock/snapshot key `m<id>` (shows unchanged) | `common_actions.py` | done |
+| 12 | Marking watched deletes the resume bookmark (`bookmark.type=1`; single item: RPC `resume` 0). Premise checked: QPC DB had 126 watched files still holding a resume bookmark | `toggle_watch.py` | done — untested |
+| 13 | `min_resume_seconds` reads `special://masterprofile/advancedsettings.xml` | `smart_cmd.py` | done |
+| 14 | Docs aligned (README, copilot-instructions) | — | done |
+| 15 | `xbmc.python.script` declaration on `common_actions.py` removed | `addon.xml` | done |
+| 16 | Smart Play appends only unwatched later episodes to the playlist | `smart_play.py` | done — untested |
+| 17 | Service: `onPlayBackStarted` (switch-save + reset) / `onAVStarted` (tracking, no 500 ms sleep; ignores a repeated call for the same episode) | `service.py` | done — needs restart |
+| 18a | Move to Top points the show profile at the target episode (`in_progress` at resume point if it has one or is unwatched, else `completed`; movies skipped) | `move_to_top.py` | done — untested |
+| 18b | Watched Toggle: profile follows only when its saved episode is among the toggled ones (watched → `completed`; unwatched + `completed` → `in_progress` at 0) | `smart_cmd.follow_watched_state`, `toggle_watch.py` | done — untested |
+| 19 | Restart prompt: episode marked unwatched while Kodi keeps its resume point is remembered (`restart_marks.json`, one-shot); next Smart Play start (≥ 30 s) or autoplay start asks Restart (default, first) / Resume from. Shared dialog `smart_cmd.ask_resume`; the autoplay prompt now uses it | `smart_cmd.py`, `smart_play.py`, `service.py`, `toggle_watch.py` | done — untested, needs restart |
+
+Decisions: item 8 (Linux/macOS lock liveness) skipped — Windows only, no publication. Item 10 (navigation cursor guard) dropped — navigation acts in the same tick the list finishes loading, so the user cannot move first, and comparing positions would give false skips. 18b restricted to "saved episode in scope" so toggling an old episode never moves the user's place. A manual start (Enter) on a restart-marked episode only gets Kodi's own resume prompt (its default cannot be changed); the mark is consumed silently.
+
+Test checklist (user, after `deploy-qpc.bat` and a Kodi restart for service changes):
+1. Watched Toggle on a single episode (not the first unwatched): cursor jumps to the first unwatched; log `focus_episode: episode <id> -> item N (view M)`. Retry with another sort order and a filtered list (`not in the visible list`, cursor stays).
+2. Queue Watched Toggle on one season behind a Refresh (Internet) on the same show: only that season changes (log `SNAPSHOT inherited/merged`). Same with Watched to Past....
+3. Refresh (Internet) on a season: `Expecting N OnUpdate events`, then `Done — N/N updates`. If `Done` comes before the last `OnUpdate`, an extra show-level event exists → switch to an idle-gap check.
+4. Navigation on a `completed` show in an "All seasons" list: cursor on the show's next unwatched episode.
+5. Quit Kodi while an action is queued: no hang, log `LOCK WAIT aborted`.
+6. Two actions started together on one show: second shows "queued" and runs after the first.
+7. Autoplay into a part-watched episode of the same show: resume menu; start another show right after an end: no menu.
+8. Move to Top on a show, then the remote's Play: starts the episode in the toast. Toggle: profile `completed` on E03 → mark E03 unwatched → Play replays E03; profile at E05 → mark E05 watched → Play starts the next unwatched; toggling some other episode leaves the profile alone.
+9. Restart prompt: needs a WATCHED episode that still holds a resume bookmark (left by marking watched before item 12; QPC has 126 — find one with `bookmark.type=1` joined to `files.playCount>0`, position > 30 s). Mark it unwatched → log `marked unwatched with a resume point — next start asks`; Play on the show → menu with Restart first (Restart = start at 0, toast `… from the start`); second Play → no menu. After item 12, marking watched then unwatched leaves no bookmark and therefore no prompt (expected).
+10. Marking a part-watched season/episode watched: resume bar gone, Enter plays from 0 without Kodi's resume prompt, Smart Play doesn't offer a position.
+
 ## Decisions
 
 - Move to Top sets `lastPlayed` to now on the target; watched status unchanged.
@@ -176,6 +215,8 @@ Reads `{showid}.json` when a show or season is active and plays accordingly:
 
 ## Open items
 
+- Next steps (2026-11-05): run the "Code review follow-up" test checklist on QPC/local → fix failures → decide version (1.0.10?), regenerate the zip, commit (`#commit`), push. Not decided.
+- Known, not planned: direct SQL writes bypass Kodi (sync add-ons such as Trakt don't see them; MySQL shared library unsupported); Refresh (Internet) may drop resume points (unchecked); orphan-profile adoption matches by show title only; profiles are per Kodi instance (local vs QPC diverge); the queue-banner suppression timer is a per-interpreter global (does not work across actions); "Reload Modules" ships in the release menu; Linux/macOS lock liveness (`pthread_kill`) not fixed (Windows only).
 - Remote Play button (2026-10-29): on a Windows media remote the button is an app command, not `<keyboard>`/`<remote>`; without `<appcommand><play_pause>` in `<Videos>` Kodi's global `PlayPause` ran and showed its own resume prompt. Fixed in the user's `keyboard.xml` (local and QPC), user-confirmed; documented in README. Smart Play falling back to Kodi's default play on a season whose saved episode is in another season (and on episodes) is by design; a season-scope improvement (play that season's in-progress/first unwatched episode without Kodi's prompt) was proposed, not decided.
 - Review of 1.0.9 (2026-10-29):
   1. Step J guard — done: ignore an `in_progress` profile only when its position is past `video.ignoresecondsatstart` (advancedsettings.xml, default 180s). A crash/quit after that point where Kodi stored nothing still restarts at 0.

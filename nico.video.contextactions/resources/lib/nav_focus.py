@@ -20,6 +20,30 @@ def _is_back(prev, path):
     return prev != path and prev.startswith(path)
 
 
+def focus_episode(episode_id, tag="NAV"):
+    """Move the cursor of the visible list to the item with this DBID. True if it was found.
+
+    Matches by DBID, so it is independent of sort order, a ".." item or a filtered list.
+    """
+    for _ in range(20):  # the list may still be refreshing after a library change: wait up to 1s
+        if not xbmc.getCondVisibility('Container.IsUpdating'):
+            break
+        xbmc.sleep(50)
+    view = next((v for v in _VIEW_IDS if xbmc.getCondVisibility(f'Control.IsVisible({v})')), None)
+    if view is None:
+        xbmc.log(f"nICo Context: [{tag}] focus_episode: no visible view container", xbmc.LOGINFO)
+        return False
+    count = int(xbmc.getInfoLabel(f'Container({view}).NumItems') or 0)
+    # count + 1: NumItems may exclude a ".." parent item, which shifts absolute positions by one
+    for i in range(count + 1):
+        if xbmc.getInfoLabel(f'Container({view}).ListItemAbsolute({i}).DBID') == str(episode_id):
+            xbmc.executebuiltin(f'SetFocus({view},{i},absolute)')
+            xbmc.log(f"nICo Context: [{tag}] focus_episode: episode {episode_id} -> item {i} (view {view})", xbmc.LOGINFO)
+            return True
+    xbmc.log(f"nICo Context: [{tag}] focus_episode: episode {episode_id} not in the visible list ({count} items)", xbmc.LOGINFO)
+    return False
+
+
 class FocusNavigator:
     """Moves the cursor to the saved season / episode when a show or season list is entered.
 
@@ -114,10 +138,9 @@ class FocusNavigator:
             return None
         if is_episode_list:
             if strategy == 'completed':
-                try:
-                    list_season = int(label(0, 'Season'))
-                except ValueError:
-                    return None
+                # One season in the list -> that season; several (e.g. "All seasons") -> whole show
+                seasons = {label(i, 'Season') for i in range(count)}
+                list_season = int(seasons.pop()) if len(seasons) == 1 and next(iter(seasons), '').lstrip('-').isdigit() else None
                 nxt = smart_play.next_unwatched(show_id, episode_id, list_season, tag)
                 if not nxt:
                     return None

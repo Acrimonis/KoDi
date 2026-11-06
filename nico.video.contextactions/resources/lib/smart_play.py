@@ -6,6 +6,7 @@ import common_locks
 import smart_cmd
 
 _REWIND_SECONDS = 5
+_ASK_MIN_START = 30  # ask only when resuming from at least this many seconds (as the autoplay prompt)
 # The bound key's original action (Kodi's default keymaps: remote <play> and keyboard <play_pause>
 # both map to PlayPause). Override with RunScript(...smart_play.py,<Action>).
 _FALLBACK = sys.argv[1] if len(sys.argv) > 1 and sys.argv[1] else 'PlayPause'
@@ -77,18 +78,19 @@ _VIDEO_PLAYLIST = 1
 
 
 def _queue_rest_of_show(show_id, episode_id, tag):
-    """Append every episode after episode_id to the video playlist, once episode_id is playing.
+    """Append every unwatched episode after episode_id to the video playlist, once episode_id is playing.
 
     Player.Open with a playlist ignores the resume time, so the episode is opened on its own
     (resume honored); Kodi's playlist then holds only that episode. Appending the later episodes
     gives "play next video automatically" something to advance to.
     """
-    episodes = common_actions.get_episodes(show_id, 'tvshow', extra_props=["episode"])
+    episodes = common_actions.get_episodes(show_id, 'tvshow', extra_props=["episode", "playcount"])
     episodes.sort(key=_episode_order)
     ids = [e['episodeid'] for e in episodes]
     if episode_id not in ids:
         return
-    later = ids[ids.index(episode_id) + 1:]
+    # Unwatched episodes only: already watched ones are skipped by autoplay
+    later = [e['episodeid'] for e in episodes[ids.index(episode_id) + 1:] if not e.get('playcount')]
     if not later:
         return
     current = common_actions.execute_rpc("Playlist.GetItems", {"playlistid": _VIDEO_PLAYLIST})
@@ -102,8 +104,20 @@ def _queue_rest_of_show(show_id, episode_id, tag):
     xbmc.log(f"nICo Context: [{tag}] Playlist.Add {len(later)} episodes after {episode_id} -> {res}", xbmc.LOGINFO)
 
 
-def _play_at(show_id, episode_id, start, tag, show_title, detail):
-    """Open the episode at `start` seconds. Logs everything so the behavior can be verified in kodi.log."""
+def _play_at(show_id, episode_id, start, tag, show_title, detail, ep=None):
+    """Open the episode at `start` seconds. Logs everything so the behavior can be verified in kodi.log.
+
+    ep: the episode's library details (season, episode, resume), used by the resume question.
+    """
+    # Marked unwatched but Kodi still holds its resume point: ask, default "Restart" (one-shot mark)
+    if smart_cmd.take_restart_mark(episode_id) and start >= _ASK_MIN_START and ep:
+        total = (ep.get('resume') or {}).get('total') or None
+        xbmc.log(f"nICo Context: [{tag}] Episode {episode_id} was marked unwatched — asking (default restart)", xbmc.LOGINFO)
+        if not smart_cmd.ask_resume(start, show_title, ep.get('season', 0), ep.get('episode', 0),
+                                    total=total, default_restart=True):
+            xbmc.log(f"nICo Context: [{tag}] Restart chosen — starting at 0", xbmc.LOGINFO)
+            detail = detail.replace(f" at {_clock(start)}", " from the start")
+            start = 0.0
     item = {"episodeid": episode_id}
     res = common_actions.execute_rpc("Player.Open", {"item": item, "options": {"resume": _time_obj(start)}})
     xbmc.log(f"nICo Context: [{tag}] Player.Open {item} start={start:.1f}s -> {res}", xbmc.LOGINFO)
@@ -179,7 +193,7 @@ def smart_play():
         start = max(0.0, position - _REWIND_SECONDS) if position > 0 else 0.0
         xbmc.log(f"nICo Context: [{tag}] Completed — next unwatched episode={nxt['episodeid']} start={start:.1f}s", xbmc.LOGINFO)
         detail = f"S{nxt.get('season', 0):02d}E{nxt.get('episode', 0):02d} (next)"
-        return _play_at(show_id, nxt['episodeid'], start, tag, show_title, detail)
+        return _play_at(show_id, nxt['episodeid'], start, tag, show_title, detail, ep=nxt)
     if strategy not in ('in_progress', 'manual_save') or not episode_id:
         return _default_play(tag, f"strategy={strategy}")
 
@@ -200,7 +214,7 @@ def smart_play():
     detail = f"S{ep.get('season', 0):02d}E{ep.get('episode', 0):02d} at {_clock(start)}"
     if profile.get('status', {}).get('source') == 'derived':
         detail += " (from Kodi)"  # profile built from Kodi's watch history, not saved by the addon
-    _play_at(show_id, int(episode_id), start, tag, show_title, detail)
+    _play_at(show_id, int(episode_id), start, tag, show_title, detail, ep=ep)
 
 
 if __name__ == '__main__':

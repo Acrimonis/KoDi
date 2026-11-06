@@ -27,14 +27,14 @@ Each action is a standalone script invoked directly by Kodi via `RunScript()` or
 | `resources/lib/move_to_top.py` | Move to Top |
 | `resources/lib/refresh_local.py` | Refresh (Local NFO) |
 | `resources/lib/refresh_internet.py` | Refresh (Internet scraper) |
-| `resources/lib/smart_cmd.py` | Persist • Save Show Profile (also called by `service.py`: on episode start if no profile, every 30s while playing, on stop/end). Also `load_profile`, `adopt_orphan_profile` (takes over the profile of a show that Refresh (Internet) recreated under a new ID: same show name, old ID gone from the library, exactly one match; episodes remapped by season/episode) and `min_resume_seconds` (Kodi's `video.ignoresecondsatstart`, default 180) |
-| `resources/lib/smart_play.py` | Smart Play — bound to the remote Play button via keymap, not a menu entry; `in_progress` → resume the saved episode (episode opened alone with the resume time, later episodes appended to the video playlist afterwards because playlist items ignore the resume time; ignored if Kodi's resume point is empty and the saved position is past the Kodi minimum), `completed` → next unwatched episode, otherwise the key's original action (`PlayPause`, overridable by script argument) |
-| `resources/lib/service.py` | Background service (loop 0.1s): tracks episode playback position (1s samples, 30s writes), ticks the library navigator, and on autoplay (an episode starting < 10s after another's end) with a saved position ≥ 30s pauses and shows Kodi's resume context menu (Resume from mm:ss / Restart; first entry default, cancel = resume; position from profile status/history, else Kodi's resume point) |
+| `resources/lib/smart_cmd.py` | Show profile writer (no menu entry; called by `service.py`: on episode start if no profile, every 30s while playing, on stop/end; and by `smart_play.py` for derived profiles). Also `load_profile`, `adopt_orphan_profile` (takes over the profile of a show that Refresh (Internet) recreated under a new ID: same show name, old ID gone from the library, exactly one match; episodes remapped by season/episode) and `min_resume_seconds` (Kodi's `video.ignoresecondsatstart`, read from `special://masterprofile/advancedsettings.xml`, default 180). Also `ask_resume()` (the shared Kodi-style Resume/Restart `contextmenu` + toast; `default_restart` puts Restart first), the restart marks (`mark_restart` / `clear_restart` / `take_restart_mark`, file `restart_marks.json`: episodes marked unwatched while Kodi still holds a resume point; one-shot) and `follow_watched_state()` (Watched Toggle → profile `completed` / `in_progress` at 0 when the saved episode is among the toggled ones) |
+| `resources/lib/smart_play.py` | Smart Play — bound to the remote Play button via keymap, not a menu entry; `in_progress` → resume the saved episode (episode opened alone with the resume time, later UNWATCHED episodes appended to the video playlist afterwards because playlist items ignore the resume time; a restart-marked episode asks Restart/Resume first; ignored if Kodi's resume point is empty and the saved position is past the Kodi minimum), `completed` → next unwatched episode, otherwise the key's original action (`PlayPause`, overridable by script argument) |
+| `resources/lib/service.py` | Background service (loop 0.1s): tracks episode playback position (1s samples, 30s writes), ticks the library navigator, and on autoplay (an episode of the SAME show starting < 10s after another's end) with a saved position ≥ 30s pauses and shows `smart_cmd.ask_resume` (Resume from mm:ss / Restart; first entry default, cancel = first entry; Restart first for restart-marked episodes; position from profile status/history, else Kodi's resume point). Playback hooks: `onPlayBackStarted` saves/clears the previous episode ("Switched"), `onAVStarted` starts tracking (metadata ready) and consumes the restart mark; Stopped/Ended/exit save as before |
 | `resources/lib/nav_focus.py` | Library navigation: on entering a show/season in the Videos window, moves the cursor to the saved season/episode from `{showid}.json` (`SetFocus`); used by `service.py` |
 | `resources/lib/common_locks.py` (run as script) | nICo Dev • Reload Modules |
 
 ### Shared modules
-- **`common_actions.py`** — All shared utilities + the full local refresh logic (`refresh()`). Contains `get_episodes()`, `_get_canonical_snapshot()`, `_restore_lastplayed()`, `_snapshot_playcount()`, `_restore_playcount()`, `_resolve_root_id()`, `execute_rpc()`, `_navigate_list()`, `_fetch_show_title()`, `_wait_for_db_change()`, `_wait_for_all_changed()`, etc.
+- **`common_actions.py`** — All shared utilities + the full local refresh logic (`refresh()`). Contains `get_episodes()`, `_get_canonical_snapshot()`, `_restore_lastplayed()`, `_snapshot_playcount()`, `_restore_playcount()`, `_resolve_root_id()`, `execute_rpc()`, `_fetch_show_title()`, `_wait_for_db_change()`, `_wait_for_all_changed()`, etc.
 - **`refresh_local.py`** — 4-line thin wrapper; all real logic lives in `common_actions.refresh()`.
 - **`common_locks.py`** — Per-show file mutex, shared snapshot persistence, queue-status notifications.
 - **`common_db.py`** — SQLite context manager (`kodi_db_context()`) targeting the latest `MyVideos*.db`.
@@ -46,7 +46,7 @@ Kodi runs each plugin invocation in a **separate Python sub-interpreter**. `id(s
 
 ### Lock pattern — every action must follow this
 ```python
-root_id = common_actions._resolve_root_id(dbid, dbtype)  # always use tvshowid as mutex key
+root_id = common_actions._resolve_root_id(dbid, dbtype)  # tvshowid as mutex key ('m<id>' for movies)
 lock_path, was_queued = common_locks.acquire(root_id, tag=tag, show_name=show_title,
     on_queue=lambda: xbmcgui.Dialog().notification(..., "Action queued…", …))
 if not was_queued:
@@ -57,7 +57,8 @@ finally:
     common_locks.release(lock_path, root_id, tag=tag, show_name=show_title)
 ```
 - `_resolve_root_id` converts season/episode dbid → tvshowid so the mutex is per-show, not per-item.
-- `acquire()` writes a `queued` lock file immediately on first contention so the snapshot system sees us as active before the current holder releases.
+- `acquire()` writes a `queued` lock file (with a timestamp) BEFORE scanning for competitors, so simultaneous starters see each other; a `queued` competitor wins if `(timestamp, thread id)` is lower, `held`/`inet`/unreadable files always block. The file also keeps the snapshot alive while waiting. The wait uses `Monitor.waitForAbort`: on Kodi shutdown the lock file is removed and `SystemExit` ends the script.
+- A movie's key is `m<id>`, so it never shares a lock or snapshot with a show of the same ID.
 
 ### Lock file statuses
 Lock file content (written by `_write_lock_status()`):
@@ -76,8 +77,8 @@ Lock file content (written by `_write_lock_status()`):
 `_snapshot_playcount(idfile_list)` is **not** merged into the canonical snapshot. It is taken **immediately after lock acquisition** (not at queue time), so it captures the state after any prior queued action (e.g., a TOGGLE that ran before a REFRESH in the queue). Restored via `_restore_playcount()` after the refresh completes.
 
 ### Post-toggle navigation (single episode → Watched)
-When a single episode is toggled to **Watched**, `_navigate_list(target_idx)` is called to move the active container focus to the first remaining unwatched episode in the season.
-- Uses `Action(Down)` / `Action(Up)` builtins with a 30ms sleep per step.
+When a single episode is toggled to **Watched**, `nav_focus.focus_episode(episodeid)` moves the active container focus to the first remaining unwatched episode in the season.
+- Matches the item by DBID in the visible view container and uses `SetFocus(<view>,<index>,absolute)`; if the episode is not in the visible list, the cursor stays.
 - Only fires when `new_val == 1` (marking watched) and a next unwatched episode exists.
 
 ### Watch in Past — preference persistence
@@ -86,7 +87,7 @@ The last-used delta is saved to `special://profile/addon_data/nico.video.context
 ### Nudge+SQL pattern (bulk toggle / watch-in-past)
 For batch operations across many episodes:
 1. **1 `SetEpisodeDetails` RPC per season** — fires Kodi's item-level `OnUpdate` event → UI badges update.
-2. **SQL batch for remaining episodes** — direct `UPDATE files SET playCount = ?` (~10ms regardless of count).
+2. **SQL batch for remaining episodes** — direct `UPDATE files SET playCount = ?` (~10ms regardless of count). Scope = the idFiles of the selected episodes only (never the keys of the shared snapshot, which may hold other episodes of the show). Marking watched also deletes the resume bookmarks (`bookmark.type = 1`) of all selected idFiles (single episode/movie: `resume` position 0 in the RPC).
 3. **UNWATCHED = `NULL` (not `0`)** in `files.playCount` — `COUNT(files.playCount)` in `season_view` excludes NULLs, so season watched counts are correct.
 4. `lastPlayed` is **never** passed to `SetEpisodeDetails` — always restored separately via `_restore_lastplayed()`.
 
@@ -101,8 +102,8 @@ For batch operations across many episodes:
 Single episode local refresh uses the same snapshot/restore cycle but calls `RefreshEpisode` once and polls with a 5s timeout.
 
 ### Internet refresh flow
-- Handles all four dbtypes. For `tvshow`/`season`: uses `VideoLibrary.RefreshTVShow(ignorenfo=True, refreshepisodes=True)` and expects `1 + N episode` `OnUpdate` events. For `movie`/`episode`: calls the corresponding `Refresh{Movie|Episode}` RPC (expects 1 event).
-- Tracks completion via `xbmc.Monitor.onNotification` counting `VideoLibrary.OnUpdate` events (expected = 1 show + N episodes).
+- Handles all four dbtypes. For `tvshow`: `VideoLibrary.RefreshTVShow(ignorenfo=True, refreshepisodes=True)`, expects `1 + N episode` `OnUpdate` events. For `season` (no RefreshSeason in Kodi): `RefreshEpisode` per episode, expects `N` events. For `movie`/`episode`: calls the corresponding `Refresh{Movie|Episode}` RPC (expects 1 event).
+- Tracks completion via `xbmc.Monitor.onNotification` counting `VideoLibrary.OnUpdate` events (expected = 1 show + N episodes for a show, N for a season).
 - **Idle timeout only** (10s no `OnUpdate`) — no hardcoded wall-clock limit so large shows don't time out mid-scrape.
 - Restores `playcount` after completion (internet scraper can reset it when recreating episode entries).
 - Lock status written as `'inet'` after acquire so queue banner shows "internet fetch" separately.
