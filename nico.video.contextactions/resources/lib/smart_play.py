@@ -104,7 +104,16 @@ def _queue_rest_of_show(show_id, episode_id, tag):
     xbmc.log(f"nICo Context: [{tag}] Playlist.Add {len(later)} episodes after {episode_id} -> {res}", xbmc.LOGINFO)
 
 
-def _play_at(show_id, episode_id, start, tag, show_title, detail, ep=None):
+def _play_at(*args, **kwargs):
+    """Open the episode (see _play_at_inner). The service's start-title toast waits while the pending flag is
+    set, so Smart Play's own toast comes first; the flag is always cleared here, whatever path ended."""
+    try:
+        _play_at_inner(*args, **kwargs)
+    finally:
+        common_locks.smartplay_pending_clear()
+
+
+def _play_at_inner(show_id, episode_id, start, tag, show_title, detail, ep=None):
     """Open the episode at `start` seconds. Logs everything so the behavior can be verified in kodi.log.
 
     ep: the episode's library details (season, episode, resume), used by the resume question.
@@ -119,6 +128,7 @@ def _play_at(show_id, episode_id, start, tag, show_title, detail, ep=None):
             detail = detail.replace(f" at {_clock(start)}", " from the start")
             start = 0.0
     item = {"episodeid": episode_id}
+    common_locks.smartplay_pending_set()  # the start-title toast waits for ours (cleared by _play_at)
     res = common_actions.execute_rpc("Player.Open", {"item": item, "options": {"resume": _time_obj(start)}})
     xbmc.log(f"nICo Context: [{tag}] Player.Open {item} start={start:.1f}s -> {res}", xbmc.LOGINFO)
     if res.get('result') != 'OK':

@@ -1,7 +1,7 @@
 # nICo Video Context Actions for Kodi
 
 **Addon ID:** `nico.video.contextactions`  
-**Version:** 1.0.9
+**Version:** 1.0.10
 **Author:** nICo BaD  
 **License:** GPL-2.0-only
 
@@ -87,6 +87,11 @@ Replaces the regular **Play** on a TV show or season. Bound to the remote's Play
 When Kodi's "Play next video automatically" moves on to an episode that was left part-way, Kodi starts it from 0. The background service catches this (an episode of the **same show** starting within 10 seconds of another one's end) and, if a saved position of at least 30 seconds exists, pauses and shows Kodi's own resume menu — **Resume from 20:00** (Kodi's translated string) / **Restart**, with a toast `Show • S01E04 • left at 20:00 (21%)` for the details. The first entry is the default, and cancelling the menu also picks it. For an episode marked unwatched (see Watched Toggle) the order is swapped: **Restart** first, so it is the default. It waits for your answer; resume seeks to the saved position, the other choice just continues from 0.
 - **Saved position:** the Persist profile (current status, then `history`, newest entry for that episode) is used first — it is exact and exists even when Kodi stored no resume point (stops under `video.ignoresecondsatstart`, default 180s). Otherwise Kodi's library resume point. If Kodi's resume point was cleared (reset) and the profile position is past that minimum, nothing is offered.
 - Manual starts (Enter) are not affected (Kodi's own prompt applies); Smart Play only asks for episodes marked unwatched (see above). Needs a Kodi restart after an update (service).
+
+### Start toast
+The ` • ` separators the addon puts inside any toast message are drawn white (`[COLOR white]`), matching the dot Amber draws between heading and message (Amber's `LabelTextColor`, white unless changed in the skin settings); the grey "queued/running" status toasts are left as they are.
+
+When any video starts, the background service shows a 6 s toast (no sound): for an episode the heading is the show title and the message `S01E02 • Episode title`; for a movie the heading is the title and the message `year • h:mm:ss` (release year and runtime, each only when known; neither → no message); for any other video (non-library file) the heading is the title, or the file name when there is none. Skin Amber draws heading and message on one line joined by a hard-coded ` • `, so a toast without a message ends in a dot (skin limitation; patching the skin was rejected, it would not survive a skin update). Music is not announced. After Smart Play, the title toast always comes after its `Smart resume` toast (Kodi queues toasts): Smart Play sets the Home-window property `nico.smartplay_pending` before opening the episode and clears it once done (toast shown or given up); the service holds the title until then, for at most 15 s. Needs a Kodi restart after an update (service).
 
 ### Library navigation to the saved position
 When you enter a show or a season in the video library, the cursor jumps to where you left off. Nothing starts playing; only the selection moves. Done by the background service (`nav_focus.py`, polling every 0.1s while the Videos window is open).

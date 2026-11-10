@@ -16,6 +16,8 @@ _LOOP_SECONDS = 0.1  # service loop period (library navigation reacts at this ra
 _PLAYER_TICK_EVERY = 10  # player position sampled every 10 loops = 1s
 _AUTOPLAY_WINDOW = 10  # an episode starting within this many seconds of another one's end is an autoplay
 _OFFER_MIN_POSITION = 30  # offer to resume only from a saved position of at least this many seconds
+_START_TOAST_MS = 6000  # display time of the title toast shown when a video starts
+_SMARTPLAY_WAIT = 15  # the title toast waits at most this long for Smart Play's toast
 _TICK_SECONDS = 30  # periodic profile write while an episode plays
 _COMPLETED_RATIO = 0.92  # position >= 92% of duration counts as completed (Kodi's default watched threshold)
 
@@ -47,7 +49,11 @@ class nICoPlayer(xbmc.Player):
         tag = self.getVideoInfoTag()
         dbid, media_type = tag.getDbId(), tag.getMediaType()
         # Profiles are per show: only library episodes are tracked
-        if media_type != 'episode' or not dbid or dbid == -1 or dbid == self._active_id:
+        tracked = media_type == 'episode' and bool(dbid) and dbid != -1
+        if tracked and dbid == self._active_id:
+            return  # repeated call for the episode already tracked
+        self._announce(tag, media_type)
+        if not tracked:
             return
         self._active_id = dbid
         self._next_write = time.time() + _TICK_SECONDS
@@ -71,6 +77,54 @@ class nICoPlayer(xbmc.Player):
         marked = smart_cmd.take_restart_mark(dbid)
         if autoplay:
             threading.Thread(target=self._offer_resume, args=(dbid, marked), daemon=True).start()
+
+    def _announce(self, tag, media_type):
+        """Toast what just started: show title / `S01E02 • Episode title`; movie: `title • year • h:mm:ss`; other video: its title (or file name)."""
+        try:
+            if not self.isPlayingVideo():
+                return
+            title = (tag.getTitle() or "").strip()
+            if media_type == 'episode':
+                season, episode = tag.getSeason(), tag.getEpisode()
+                code = f"S{season:02d}E{episode:02d}" if season >= 0 and episode >= 0 else ""
+                heading = (tag.getTVShowTitle() or "").strip() or title
+                detail = common_locks.DOT_SPC.join(p for p in (code, title if heading != title else "") if p)
+            else:
+                heading = title or xbmc.getInfoLabel('Player.Filename')
+                parts = []
+                if media_type == 'movie':  # message = `year • h:mm:ss`, each part only when known
+                    year = tag.getYear()
+                    if year and year > 0:
+                        parts.append(str(year))
+                    seconds = int(tag.getDuration() or 0)
+                    if seconds > 0:
+                        parts.append(f"{seconds // 3600}:{seconds % 3600 // 60:02d}:{seconds % 60:02d}")
+                detail = common_locks.DOT_SPC.join(parts)
+            if not heading:
+                return
+            if common_locks.smartplay_pending_age() is None:
+                common_locks.notification(heading, detail, xbmcgui.NOTIFICATION_INFO, _START_TOAST_MS, sound=False)
+            else:
+                # Smart Play opened this and still owes its own toast: ours goes after it (Kodi queues toasts)
+                threading.Thread(target=self._announce_after_smart_play,
+                                 args=(heading, detail, self.getPlayingFile()), daemon=True).start()
+        except Exception as e:
+            xbmc.log(f"nICo Service: Start toast failed: {e}", xbmc.LOGWARNING)
+
+    def _announce_after_smart_play(self, heading, detail, playing_file):
+        """Wait until Smart Play has shown its toast (flag cleared; capped in case it never clears), then show the title."""
+        try:
+            monitor = xbmc.Monitor()
+            while True:
+                age = common_locks.smartplay_pending_age()
+                if age is None or age > _SMARTPLAY_WAIT:
+                    break
+                if monitor.waitForAbort(0.1):
+                    return
+            if self.isPlayingVideo() and self.getPlayingFile() == playing_file:  # not stopped/changed meanwhile
+                common_locks.notification(heading, detail, xbmcgui.NOTIFICATION_INFO, _START_TOAST_MS, sound=False)
+        except Exception as e:
+            xbmc.log(f"nICo Service: Delayed start toast failed: {e}", xbmc.LOGWARNING)
 
     def onPlayBackStopped(self):
         if self._active_id:

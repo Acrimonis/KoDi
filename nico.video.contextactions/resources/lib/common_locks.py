@@ -12,6 +12,7 @@ import ctypes, ctypes.util, json, os, random, sys, threading, time, importlib, x
 
 DOT = "\u2022"
 DOT_SPC = " \u2022 "
+_DOT_SPC_WHITE = " [COLOR white]\u2022[/COLOR] "  # DOT_SPC with a white dot, for toasts
 
 _LOCK_DIR = None
 _notif_suppress_until_ms = 0  # suppress queue status notifications until this timestamp
@@ -50,7 +51,10 @@ def suppress_queue_notification(duration_ms):
 
 
 def notification(heading, message, icon=xbmcgui.NOTIFICATION_INFO, time=3000, sound=True):
-    """Show a notification and set the global suppression timer to its duration."""
+    """Show a notification and set the global suppression timer to its duration.
+
+    The separators we add (DOT_SPC) are drawn white, like the dot Amber puts between heading and message."""
+    message = message.replace(DOT_SPC, _DOT_SPC_WHITE)
     xbmcgui.Dialog().notification(heading, message, icon, time, sound)
     suppress_queue_notification(time)
 
@@ -71,6 +75,27 @@ def notificationStatus(heading, message, icon="", time=3000, sound=False):
     h = f"[COLOR grey]{heading}[/COLOR]"
     m = f"[COLOR grey]{message}[/COLOR]"
     xbmcgui.Dialog().notification(h, m, icon, time, sound)
+
+
+_SMARTPLAY_PENDING = "nico.smartplay_pending"  # Home window property: set by Smart Play while it still owes its toast
+
+
+def smartplay_pending_set():
+    """Smart Play is about to open an episode and will show its own toast: the service's title toast must wait."""
+    xbmcgui.Window(10000).setProperty(_SMARTPLAY_PENDING, str(time.time()))
+
+
+def smartplay_pending_clear():
+    xbmcgui.Window(10000).clearProperty(_SMARTPLAY_PENDING)
+
+
+def smartplay_pending_age():
+    """Seconds since Smart Play flagged itself as pending, or None when it is not pending."""
+    value = xbmcgui.Window(10000).getProperty(_SMARTPLAY_PENDING)
+    try:
+        return max(0.0, time.time() - float(value)) if value else None
+    except ValueError:
+        return None
 
 
 def _ms():
