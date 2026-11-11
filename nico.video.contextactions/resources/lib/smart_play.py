@@ -78,7 +78,10 @@ _VIDEO_PLAYLIST = 1
 
 
 def _queue_rest_of_show(show_id, episode_id, tag):
-    """Append every unwatched episode after episode_id to the video playlist, once episode_id is playing.
+    """Append the unwatched episodes that follow episode_id to the video playlist, once episode_id is playing.
+
+    After a regular episode: later regular episodes only (specials, season 0, are never queued).
+    After a special: the later specials, then the regular episodes.
 
     Player.Open with a playlist ignores the resume time, so the episode is opened on its own
     (resume honored); Kodi's playlist then holds only that episode. Appending the later episodes
@@ -89,8 +92,19 @@ def _queue_rest_of_show(show_id, episode_id, tag):
     ids = [e['episodeid'] for e in episodes]
     if episode_id not in ids:
         return
+    anchor = episodes[ids.index(episode_id)]
+    specials = [e for e in episodes if e.get('season', 0) == 0]
+    regular = [e for e in episodes if e.get('season', 0) != 0]
+    if anchor.get('season', 0) == 0:
+        # Playing a special: the specials after it, then the regular episodes (first season with unwatched ones on)
+        s_ids = [e['episodeid'] for e in specials]
+        candidates = specials[s_ids.index(episode_id) + 1:] + regular
+    else:
+        # Specials are never an automatic candidate when moving on from a regular episode
+        r_ids = [e['episodeid'] for e in regular]
+        candidates = regular[r_ids.index(episode_id) + 1:]
     # Unwatched episodes only: already watched ones are skipped by autoplay
-    later = [e['episodeid'] for e in episodes[ids.index(episode_id) + 1:] if not e.get('playcount')]
+    later = [e['episodeid'] for e in candidates if not e.get('playcount')]
     if not later:
         return
     current = common_actions.execute_rpc("Playlist.GetItems", {"playlistid": _VIDEO_PLAYLIST})
