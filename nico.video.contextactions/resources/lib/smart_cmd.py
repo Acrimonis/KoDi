@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import time
 import xml.etree.ElementTree as ET
@@ -372,7 +373,11 @@ def ask_resume(position, show_title, season, episode, total=None, default_restar
     """
     at = clock(position)
     resume_label = xbmc.getLocalizedString(12022)
-    resume_label = resume_label.replace('%s', at) if '%s' in resume_label else f"{resume_label or 'Resume from'} {at}"
+    # The string holds a placeholder: `%s` (older Kodi) or `{0:s}` (newer); without one, the time is appended
+    if re.search(r'%s|\{[^}]*\}', resume_label):
+        resume_label = re.sub(r'%s|\{[^}]*\}', lambda _: at, resume_label, count=1)
+    else:
+        resume_label = f"{resume_label or 'Resume from'} {at}"
     begin_label = "Restart"
     percent = f" ({position / total * 100:.0f}%)" if total else ""
     common_locks.notification(show_title, f"S{int(season or 0):02d}E{int(episode or 0):02d}{common_locks.DOT_SPC}"

@@ -4,6 +4,7 @@ import sys
 import common_actions
 import common_locks
 import smart_cmd
+import smart_queue
 
 _REWIND_SECONDS = 5
 _ASK_MIN_START = 30  # ask only when resuming from at least this many seconds (as the autoplay prompt)
@@ -15,11 +16,6 @@ _FALLBACK = sys.argv[1] if len(sys.argv) > 1 and sys.argv[1] else 'PlayPause'
 def _default_play(tag, reason):
     xbmc.log(f"nICo Context: [{tag}] Default play ({_FALLBACK}) — {reason}", xbmc.LOGINFO)
     xbmc.executebuiltin(f'Action({_FALLBACK})')
-
-
-def _episode_order(e):
-    """Season then episode, specials (season 0) last."""
-    return (e.get('season', 0) == 0, e.get('season', 0), e.get('episode', 0))
 
 
 def _derive_profile(show_id, tag):
@@ -35,7 +31,7 @@ def _derive_profile(show_id, tag):
         # Resume point, or dated but unwatched (e.g. a Move to Top target) -> continue that episode
         strategy = 'in_progress' if position > 0 or not target.get('playcount') else 'completed'
     else:
-        unwatched = sorted((e for e in episodes if not e.get('playcount')), key=_episode_order)
+        unwatched = sorted((e for e in episodes if not e.get('playcount')), key=smart_queue.episode_order)
         if not unwatched:
             return None
         target, position, strategy = unwatched[0], 0, 'in_progress'
@@ -53,7 +49,7 @@ def next_unwatched(show_id, after_id, season_num, tag):
     episodes = common_actions.get_episodes(show_id, 'tvshow', extra_props=["playcount", "episode", "resume"])
     if season_num is not None:
         episodes = [e for e in episodes if e.get('season') == season_num]
-    episodes.sort(key=_episode_order)
+    episodes.sort(key=smart_queue.episode_order)
     ids = [e['episodeid'] for e in episodes]
     if after_id in ids:
         later = [e for e in episodes[ids.index(after_id) + 1:] if not e.get('playcount')]
@@ -72,50 +68,6 @@ def _clock(seconds):
     s = int(seconds)
     h, m, s = s // 3600, s % 3600 // 60, s % 60
     return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
-
-
-_VIDEO_PLAYLIST = 1
-
-
-def _queue_rest_of_show(show_id, episode_id, tag):
-    """Append the unwatched episodes that follow episode_id to the video playlist, once episode_id is playing.
-
-    After a regular episode: later regular episodes only (specials, season 0, are never queued).
-    After a special: the later specials, then the regular episodes.
-
-    Player.Open with a playlist ignores the resume time, so the episode is opened on its own
-    (resume honored); Kodi's playlist then holds only that episode. Appending the later episodes
-    gives "play next video automatically" something to advance to.
-    """
-    episodes = common_actions.get_episodes(show_id, 'tvshow', extra_props=["episode", "playcount"])
-    episodes.sort(key=_episode_order)
-    ids = [e['episodeid'] for e in episodes]
-    if episode_id not in ids:
-        return
-    anchor = episodes[ids.index(episode_id)]
-    specials = [e for e in episodes if e.get('season', 0) == 0]
-    regular = [e for e in episodes if e.get('season', 0) != 0]
-    if anchor.get('season', 0) == 0:
-        # Playing a special: the specials after it, then the regular episodes (first season with unwatched ones on)
-        s_ids = [e['episodeid'] for e in specials]
-        candidates = specials[s_ids.index(episode_id) + 1:] + regular
-    else:
-        # Specials are never an automatic candidate when moving on from a regular episode
-        r_ids = [e['episodeid'] for e in regular]
-        candidates = regular[r_ids.index(episode_id) + 1:]
-    # Unwatched episodes only: already watched ones are skipped by autoplay
-    later = [e['episodeid'] for e in candidates if not e.get('playcount')]
-    if not later:
-        return
-    current = common_actions.execute_rpc("Playlist.GetItems", {"playlistid": _VIDEO_PLAYLIST})
-    items = current.get('result', {}).get('items', [])
-    xbmc.log(f"nICo Context: [{tag}] Playlist before append: {len(items)} item(s) {items}", xbmc.LOGINFO)
-    if len(items) != 1:
-        xbmc.log(f"nICo Context: [{tag}] Playlist is not just the playing episode — not appending", xbmc.LOGWARNING)
-        return
-    res = common_actions.execute_rpc("Playlist.Add", {"playlistid": _VIDEO_PLAYLIST,
-                                                      "item": [{"episodeid": i} for i in later]})
-    xbmc.log(f"nICo Context: [{tag}] Playlist.Add {len(later)} episodes after {episode_id} -> {res}", xbmc.LOGINFO)
 
 
 def _play_at(*args, **kwargs):
@@ -171,10 +123,6 @@ def _play_at_inner(show_id, episode_id, start, tag, show_title, detail, ep=None)
     if abs(actual - start) > 10:
         player.seekTime(start)
         xbmc.log(f"nICo Context: [{tag}] Resume time not honored — seekTime({start:.1f}) fallback", xbmc.LOGINFO)
-    try:
-        _queue_rest_of_show(show_id, episode_id, tag)
-    except Exception as e:
-        xbmc.log(f"nICo Context: [{tag}] Could not queue the rest of the show: {e}", xbmc.LOGWARNING)
     common_locks.notification(show_title, f"Smart resume{common_locks.DOT_SPC}{detail}",
                               xbmcgui.NOTIFICATION_INFO, 2500)
 

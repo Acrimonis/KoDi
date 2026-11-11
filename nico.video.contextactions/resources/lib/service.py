@@ -10,6 +10,7 @@ sys.path.append(os.path.dirname(__file__))
 import common_actions
 import common_locks
 import smart_cmd
+import smart_queue
 import nav_focus
 
 _LOOP_SECONDS = 0.1  # service loop period (library navigation reacts at this rate)
@@ -77,6 +78,16 @@ class nICoPlayer(xbmc.Player):
         marked = smart_cmd.take_restart_mark(dbid)
         if autoplay:
             threading.Thread(target=self._offer_resume, args=(dbid, marked), daemon=True).start()
+        elif self._active_show:
+            # Whatever started the episode (Smart Play, Enter in the library...): the queue after it follows the
+            # same rules. Autoplay moving on keeps the queue built at the first start.
+            threading.Thread(target=self._sync_queue, args=(dbid, self._active_show), daemon=True).start()
+
+    def _sync_queue(self, episode_id, show_id):
+        try:
+            smart_queue.sync_queue(int(show_id), int(episode_id))
+        except Exception as e:
+            xbmc.log(f"nICo Service: Queue sync failed: {e}", xbmc.LOGERROR)
 
     def _announce(self, tag, media_type):
         """Toast what just started: show title / `S01E02 • Episode title`; movie: `title • year • h:mm:ss`; other video: its title (or file name)."""

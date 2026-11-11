@@ -563,7 +563,7 @@ if __name__ == '__main__':
     # Ensure local path is available and modules are imported so the loop can find them
     sys.path.append(os.path.dirname(__file__))
     try:
-        import common_actions, common_db, smart_cmd, watched_past, toggle_watch, move_to_top, smart_play
+        import common_actions, common_db, smart_cmd, watched_past, toggle_watch, move_to_top, smart_play, smart_queue
     except ImportError:
         pass
 

@@ -5,8 +5,10 @@
 Before making any code change:
 
 1. **Summary first** — Describe what you plan to change and why. Wait for my confirmation before proceeding.
-2. **Diff second** — Show a file diff (old vs new) of the exact proposed changes. Wait for my confirmation before proceeding.
-3. **Then apply** — Only modify the files after I explicitly confirm the diff.
+2. **Implement** — Apply the change after I confirm the summary. Do not show a diff for approval.
+3. **Review** — Review your own changes for bugs and regressions, and fix what you find.
+4. **Update** — Update the documentation (README, Tracking) affected by the change.
+5. **Report** — Report what changed, the review result, and how to test.
 
 For investigation-only tasks (reading logs, querying the DB, explaining behavior) skip this workflow and respond directly.
 
