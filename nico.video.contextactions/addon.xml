@@ -16,22 +16,25 @@
                 <visible>[String.IsEqual(ListItem.DBType,movie) | String.IsEqual(ListItem.DBType,tvshow) | String.IsEqual(ListItem.DBType,season) | String.IsEqual(ListItem.DBType,episode)]</visible>
             </item>
             -->
-            <item library="resources/lib/watched_past.py">
-                <label>&#x2022; Watched to Past...</label>
-                <visible>[String.IsEqual(ListItem.DBType,tvshow) | String.IsEqual(ListItem.DBType,season) | String.IsEqual(ListItem.DBType,episode)]</visible>
-            </item>
             <item library="resources/lib/toggle_watch.py">
                 <label>&#x2022; Watched Toggle</label>
                 <visible>[String.IsEqual(ListItem.DBType,movie) | String.IsEqual(ListItem.DBType,tvshow) | String.IsEqual(ListItem.DBType,season) | String.IsEqual(ListItem.DBType,episode)]</visible>
+            </item>
+            <item library="resources/lib/watched_past.py">
+                <label>&#x2022; Watched to Past...</label>
+                <visible>[String.IsEqual(ListItem.DBType,tvshow) | String.IsEqual(ListItem.DBType,season) | String.IsEqual(ListItem.DBType,episode)]</visible>
             </item>
             <item library="resources/lib/move_to_top.py">
                 <label>&#x2022; Move to Top</label>
                 <visible>[String.IsEqual(ListItem.DBType,movie) | String.IsEqual(ListItem.DBType,tvshow) | String.IsEqual(ListItem.DBType,season) | String.IsEqual(ListItem.DBType,episode)]</visible>
             </item>
+            <!-- Disabled: nICo Dev - Reload Modules (re-enable by uncommenting)
             <item library="resources/lib/common_locks.py">
                 <label>nICo Dev &#x2022; Reload Modules</label>
                 <visible>[String.IsEqual(ListItem.DBType,movie) | String.IsEqual(ListItem.DBType,tvshow) | String.IsEqual(ListItem.DBType,season) | String.IsEqual(ListItem.DBType,episode)]</visible>
             </item>
+            -->
+
         </menu>
     </extension>
 

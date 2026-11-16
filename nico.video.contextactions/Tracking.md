@@ -201,9 +201,64 @@ Test checklist (user, after `deploy-qpc.bat` and a Kodi restart for service chan
 10. Marking a part-watched season/episode watched: resume bar gone, Enter plays from 0 without Kodi's resume prompt, Smart Play doesn't offer a position.
 11. Start toast: play a library episode (heading show, message `S01E02 • title`), a movie and a non-library file (title / file name only), and music (nothing). Check that Smart Play's `Smart resume` toast and the autoplay resume menu's toast still appear (Kodi may queue them behind the start toast), and that the toast fits/scrolls on Amber with a long title.
 
+## Normalize the last-watched actions (planned 2026-11-16, not implemented)
+
+Done the same day, outside the plan: `nICo Dev • Reload Modules` menu entry commented out in `addon.xml` (function `reload_modules()` kept; supersedes the "stays visible" decision below); `Watched Toggle` now listed before `Watched to Past...`.
+
+**Decided (user, 2026-11-16)**
+
+| # | Decision |
+|---|----------|
+| 1 | `• Move to Top` → `• Watched to now`. Same target rule as today (episode → itself; season/show → first unwatched, else first; movie → itself), sets `lastPlayed` = now. Works on unwatched items. |
+| 2 | `• Watched to Past...` → `• Watched to...` (movies visible too). The picked delta gives the **ref date** = now − delta (as today). |
+| 3 | Ref older than some dates in scope: unchanged — every `lastPlayed` newer than the ref is clamped to the ref. "Never (clear dates)": unchanged. |
+| 4 | Ref newer than the most recent watched date in scope (replaces "Already in past, nothing to shift"): only that most recent date moves to the ref. Ties on the max date: **one** episode, the latest in show order (season, then episode, season 0 last). Ref equal to the max: nothing to do. |
+| 5 | The forward move re-points the show profile at the moved episode (same helper as Watched to now; movies: no profile). |
+| 6 | Countdown 2 s (was 5 s) for **both** actions. |
+
+**Defaults taken (not yet confirmed)**
+
+- "Most recent" is computed within the scope of the selected item (season → that season only).
+- `Watched to...` on never-watched items does nothing (`No watched episodes — nothing to do`; movie: `Not watched — nothing to do`). Only `Watched to now` can date an unwatched item.
+- Movies in `Watched to...`: one item, so ref older or newer than its date both just set it to the ref; "Never" clears it. Written by `SetMovieDetails` (RPC); no snapshot (as Move to Top today, see Open items).
+- The countdown is a plain delay (as today: **not cancellable**, only Kodi shutdown stops it). `Watched to...` gets it after the delta dialog, before the lock. Texts: `Watched to now in 2s…`, `Shifting watch date in 2s…`.
+- Toasts: queued `Watched to now queued…`; result `Watched to now • S01E03` (movie: `Watched to now`); forward result `Watch date to 5 Nov 26 • S01E03`. Clamp/clear texts unchanged.
+- Menu order: Watched Toggle, Watched to..., Watched to now, Refresh (Internet) first.
+- File names (`move_to_top.py`, `watched_past.py`) and the README keymap `t` binding stay; only labels, texts, logic change. Delta dialog title `Shift watch date to` → `Watched to`.
+
+**Steps**
+
+| # | Step | Files | State |
+|---|------|-------|-------|
+| N1 | Labels/order/visibility: rename both entries, movie added to `Watched to...`, order as above | `addon.xml` | planned |
+| N2 | Shared helpers in `common_actions.py`: `countdown(title, text, seconds=2)`; `point_profile(target, tag)` (extracted from `move_to_top.py`: `in_progress` if resume position > 0 or unwatched, else `completed`) | `common_actions.py`, `move_to_top.py` | planned |
+| N3 | `move_to_top.py`: countdown 2 s, new texts, use shared helpers; logic unchanged | `move_to_top.py` | planned |
+| N4 | `watched_past.py`: movie branch (RPC read/write); `get_episodes`/single-episode dict also return `episode`; countdown; forward branch (max date in scope, tie → latest, RPC `SetEpisodeDetails`, `update_snapshot_entries`, `point_profile`) replacing "Already in past" | `watched_past.py` | planned |
+| N5 | Docs: README (table, sections, notification texts, "Watched to...": two directions), `copilot-instructions.md`, Decisions below, Reload paragraph | docs | planned |
+
+**Plan review (self, 2 passes)**
+
+- Plan correction: "Watched to now" is **not** "Watched to... with delta 0" — its target is the first unwatched episode, the forward rule's target is the max-date episode. Only the countdown and the profile re-point are shared.
+- Earlier statement that Move to Top's countdown was cancellable was wrong: it is not (see Decisions). Cancel would need a dialog; not planned.
+- Locks/snapshot: all writes stay under the show lock (taken after dialog + countdown). The forward write updates the snapshot (`update_snapshot_entries`) so a queued restorer keeps it. Movies: lock key `m<id>`, no snapshot entry (known gap).
+- Strings compare correctly (`YYYY-MM-DD HH:MM:SS`), as the clamp already relies on.
+- Risks: `SetMovieDetails` with `lastplayed=""` for "Never" is untested (the episode path uses it); clamp collapses dates, so ties are expected — hence the one/latest rule; the forward write is one RPC, no SQL, so no nudge needed.
+- Unchanged: Never, clamp, queue/lock behavior, `Container.Refresh`.
+
+**Test list (after implementation, Kodi restart needed for `addon.xml`)**
+
+1. Menu: order and labels; `Watched to...` visible on a movie.
+2. Show watched 3 months ago → `Watched to...` Yesterday: latest episode (tie → latest in order) gets yesterday; others unchanged; profile points at it; Smart Play starts there.
+3. Same show → 1 month: all dates newer than the ref clamp (as before).
+4. Ref equal to the max date: nothing to do (no write, no profile change).
+5. Season scope: most recent computed in that season only.
+6. Unwatched show/movie: `Watched to...` no-op toast; `Watched to now` dates it.
+7. Movie: older ref, newer ref, Never.
+8. Countdown 2 s on both; queued case behind Refresh (Internet) keeps the new date.
+
 ## Decisions
 
-- Move to Top sets `lastPlayed` to now on the target; watched status unchanged.
+- (2026-11-16: names, the countdown length and the Reload entry below are superseded by "Normalize the last-watched actions".) Move to Top sets `lastPlayed` to now on the target; watched status unchanged.
 - Target: Episode → itself. Season → first unwatched of the season, else its first episode. TV Show → first unwatched of the show, else its first episode. Movie → itself.
 - Ordering: by season then episode, season 0 (specials) last.
 - Fixed 5s countdown (5s…1s), no cancel, not configurable.

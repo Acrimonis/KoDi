@@ -130,10 +130,9 @@ Context menu entries per item type (`addon.xml` visibility):
 |-------|:-----:|:-------:|:------:|:-------:|
 | • Refresh (Internet) | ✓ | ✓ | ✓ | ✓ |
 | • Refresh (Local) — *disabled* | – | – | – | – |
-| • Watched to Past... | – | ✓ | ✓ | ✓ |
 | • Watched Toggle | ✓ | ✓ | ✓ | ✓ |
+| • Watched to Past... | – | ✓ | ✓ | ✓ |
 | • Move to Top | ✓ | ✓ | ✓ | ✓ |
-| nICo Dev • Reload Modules | ✓ | ✓ | ✓ | ✓ |
 
 Smart Play has no menu entry (remote Play button via keymap).
 
@@ -156,7 +155,7 @@ Smart Play has no menu entry (remote Play button via keymap).
 
 ## Development
 
-- **Reload Modules:** the context menu entry `nICo Dev • Reload Modules` runs `resources/lib/common_locks.py`, which reloads the addon's cached Python modules without restarting Kodi (toast: `nICo Dev PlugiN: N modules reloaded`). Changes to `addon.xml` and to the background service (`service.py`, `smart_cmd.py` as used by it) still require a Kodi restart.
+- **Reload Modules (menu entry disabled, commented out in `addon.xml`):** the context menu entry `nICo Dev • Reload Modules` ran `resources/lib/common_locks.py`, which reloads the addon's cached Python modules without restarting Kodi (toast: `nICo Dev PlugiN: N modules reloaded`). Changes to `addon.xml` and to the background service (`service.py`, `smart_cmd.py` as used by it) still require a Kodi restart.
 - **Deploy scripts** (repo root, `robocopy /MIR` into a Kodi addons folder, excluding `.git`, `.github`, `__pycache__`, `AGENTS.md`, `Tracking.md`, `*.zip`, `*.bat`):
   - `deploy.bat` → `D:\.kodi\portable_data\addons\nico.video.contextactions`
   - `deploy-qpc.bat` → `P:\.kodi_d\addons\nico.video.contextactions`; also builds `nico.video.contextactions-<version>.zip` (version read from `addon.xml`) in the repo root and copies it to `P:\.kodi_d\X__WorkinG__X`
